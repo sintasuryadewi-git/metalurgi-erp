@@ -18,15 +18,25 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.className} bg-slate-50 text-slate-900`}>
-        <div className="flex min-h-screen">
-          {/* Sidebar Area */}
-          <div className="w-64 flex-shrink-0">
-            <Sidebar />
-          </div>
+        <div className="min-h-screen">
           
-          {/* Main Content Area */}
-          <main className="flex-1 p-8 overflow-y-auto h-screen">
-            <div className="max-w-7xl mx-auto">
+          {/* PERBAIKAN 1: Hapus div wrapper 'w-64'. 
+            Sidebar dipanggil langsung karena dia sudah punya properti 'fixed' di dalamnya.
+          */}
+          <Sidebar />
+          
+          {/* PERBAIKAN 2: Main Content Responsif 
+            - ml-0: Di HP margin kiri 0 (full width)
+            - md:ml-64: Di Laptop margin kiri 64 (memberi tempat untuk sidebar)
+            - p-4 md:p-8: Padding lebih kecil di HP biar muat banyak
+          */}
+          <main className="flex-1 ml-0 md:ml-64 transition-all duration-300 p-4 md:p-8 min-h-screen">
+            
+            {/* PERBAIKAN 3: Top Margin di Mobile
+              - mt-12: Di HP, konten turun sedikit supaya judul tidak tertutup tombol Hamburger Menu
+              - md:mt-0: Di Laptop, konten naik normal
+            */}
+            <div className="max-w-7xl mx-auto mt-12 md:mt-0">
               {children}
             </div>
           </main>
