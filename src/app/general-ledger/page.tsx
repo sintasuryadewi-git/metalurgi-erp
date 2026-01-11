@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Search, Calendar, Download, Printer, 
   ArrowUpRight, ArrowDownLeft, FileText, 
-  ChevronRight, LayoutGrid, List, Filter, Loader2, RefreshCw, Calculator
+  ChevronRight, LayoutGrid, List, Filter, Loader2, RefreshCw, Calculator, Menu
 } from 'lucide-react';
 
 // Import Jembatan Google Sheets
@@ -22,6 +22,7 @@ export default function GeneralLedgerPage() {
   const [activeAccountCode, setActiveAccountCode] = useState<string>('1-1002'); 
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false); // Toggle Sidebar di Mobile
   
   // FITUR: SALDO AWAL & FILTER TANGGAL
   const [initialBalance, setInitialBalance] = useState<number>(0);
@@ -52,18 +53,15 @@ export default function GeneralLedgerPage() {
       // --- LOCAL STORAGE DATA ---
       let overrides: Record<string, any[]> = {};
       let manualTrx: any[] = [];
-      let posJournals: any[] = []; // [NEW] Variable for POS Data
+      let posJournals: any[] = []; 
       
       if (typeof window !== 'undefined') {
-         // 1. Ambil Data Overrides
          const savedOverrides = localStorage.getItem('METALURGI_JOURNAL_OVERRIDES');
          if (savedOverrides) overrides = JSON.parse(savedOverrides);
 
-         // 2. Ambil Data Manual Transactions
          const savedManuals = localStorage.getItem('METALURGI_MANUAL_TRX');
          if (savedManuals) manualTrx = JSON.parse(savedManuals);
 
-         // 3. [NEW] Ambil Data POS Auto-Journals
          const savedPos = localStorage.getItem('METALURGI_GL_JOURNALS');
          if (savedPos) posJournals = JSON.parse(savedPos);
       }
@@ -177,12 +175,10 @@ export default function GeneralLedgerPage() {
           });
       });
 
-      // 6. [NEW] PROCESS POS JOURNALS (INTEGRATION FIX)
-      // Langsung gabungkan array jurnal POS ke dalam generatedJournals
-      // Format data POS sudah { date, ref, desc, debit_acc, credit_acc, amount }
+      // 6. PROCESS POS JOURNALS
       generatedJournals = [...generatedJournals, ...posJournals];
 
-      // Sort by Date (All Sources Combined)
+      // Sort by Date
       generatedJournals.sort((a, b) => a.date.localeCompare(b.date));
       setAllJournals(generatedJournals);
 
@@ -251,33 +247,47 @@ export default function GeneralLedgerPage() {
   const fmtMoney = (n: number) => "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
   return (
-    <div className="pb-20 h-[calc(100vh-6rem)] flex flex-col">
+    <div className="pb-20 h-[calc(100vh-6rem)] flex flex-col font-sans">
       
-      {/* HEADER */}
-      <div className="flex justify-between items-center mb-6">
+      {/* HEADER: RESPONSIVE */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-            <FileText className="text-blue-600"/> Buku Besar (General Ledger)
+            <FileText className="text-blue-600"/> Buku Besar
             {loading && <Loader2 className="animate-spin text-slate-400" size={18}/>}
           </h1>
-          <p className="text-slate-500 text-sm mt-1">Detail mutasi dan saldo per akun akuntansi (Integrated: Sheets + Manual + POS).</p>
+          <p className="text-slate-500 text-xs mt-1">Detail mutasi & saldo per akun.</p>
         </div>
-        <div className="flex gap-2">
+        
+        {/* Tombol Aksi & Toggle Sidebar Mobile */}
+        <div className="flex gap-2 w-full md:w-auto">
+           {/* Tombol Show Account List (Mobile Only) */}
+           <button 
+             onClick={() => setShowMobileSidebar(!showMobileSidebar)} 
+             className="md:hidden flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-50 text-blue-700 font-bold rounded-lg border border-blue-200 text-sm"
+           >
+             <List size={16}/> {showMobileSidebar ? 'Tutup Akun' : 'Pilih Akun'}
+           </button>
+
            <button onClick={loadData} className="p-2 border rounded-lg hover:bg-slate-50 text-slate-600 bg-white" title="Refresh Data">
               <RefreshCw size={20} className={loading ? 'animate-spin' : ''}/>
            </button>
            <button className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-50">
-             <Download size={16}/> Export Excel
+             <Download size={16}/> <span className="hidden md:inline">Export</span>
            </button>
         </div>
       </div>
 
-      <div className="flex flex-1 gap-6 overflow-hidden">
+      {/* MAIN CONTENT: RESPONSIVE LAYOUT (Col on Mobile, Row on Desktop) */}
+      <div className="flex flex-col md:flex-row flex-1 gap-6 overflow-hidden relative">
         
-        {/* LEFT SIDEBAR: COA NAVIGATOR */}
-        <div className="w-80 bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden shadow-sm">
-           <div className="p-4 border-b border-slate-100 bg-slate-50">
-              <div className="relative">
+        {/* LEFT SIDEBAR: COA NAVIGATOR (Responsive Visibility) */}
+        <div className={`
+            absolute md:relative z-20 top-0 left-0 h-full w-full md:w-80 bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden shadow-lg md:shadow-sm transition-transform duration-300
+            ${showMobileSidebar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        `}>
+           <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+              <div className="relative flex-1 mr-2">
                  <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
                  <input 
                     type="text" placeholder="Cari Akun..." 
@@ -286,6 +296,8 @@ export default function GeneralLedgerPage() {
                     onChange={(e) => setSearchTerm(e.target.value)}
                  />
               </div>
+              {/* Close Button Mobile */}
+              <button onClick={() => setShowMobileSidebar(false)} className="md:hidden p-2 bg-slate-200 rounded-full"><ChevronRight size={16}/></button>
            </div>
            
            <div className="flex-1 overflow-y-auto p-2 space-y-4">
@@ -298,8 +310,12 @@ export default function GeneralLedgerPage() {
                        {cat.accounts.map((acc: any) => (
                           <button 
                             key={acc.Account_Code}
-                            onClick={() => { setActiveAccountCode(acc.Account_Code); setInitialBalance(0); }} 
-                            className={`w-full text-left px-3 py-2 rounded-lg text-sm flex justify-between items-center transition-all ${
+                            onClick={() => { 
+                                setActiveAccountCode(acc.Account_Code); 
+                                setInitialBalance(0);
+                                setShowMobileSidebar(false); // Auto close on select (Mobile)
+                            }} 
+                            className={`w-full text-left px-3 py-3 md:py-2 rounded-lg text-sm flex justify-between items-center transition-all ${
                                activeAccountCode === acc.Account_Code 
                                ? 'bg-blue-50 text-blue-700 font-bold ring-1 ring-blue-200' 
                                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
@@ -316,64 +332,67 @@ export default function GeneralLedgerPage() {
         </div>
 
         {/* RIGHT CONTENT: LEDGER TABLE */}
-        <div className="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden w-full">
            
            {/* Ledger Header & Controls */}
-           <div className="p-6 border-b border-slate-100 bg-white space-y-4">
-              <div className="flex justify-between items-start">
-                 <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-bold text-slate-800">{activeAccountInfo?.Account_Name || 'Pilih Akun'}</h2>
-                    <span className="bg-slate-100 text-slate-500 text-xs font-mono px-2 py-0.5 rounded font-bold">{activeAccountCode}</span>
-                    <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border`}>Type: {activeAccountInfo?.Type}</span>
+           <div className="p-4 md:p-6 border-b border-slate-100 bg-white space-y-4">
+              
+              {/* Top Row: Title & Date */}
+              <div className="flex flex-col md:flex-row justify-between items-start gap-4">
+                 <div className="flex flex-col gap-1">
+                    <h2 className="text-lg md:text-xl font-bold text-slate-800">{activeAccountInfo?.Account_Name || 'Pilih Akun'}</h2>
+                    <div className="flex gap-2">
+                        <span className="bg-slate-100 text-slate-500 text-xs font-mono px-2 py-0.5 rounded font-bold">{activeAccountCode}</span>
+                        <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border`}>{activeAccountInfo?.Type || '-'}</span>
+                    </div>
                  </div>
                  
-                 <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase ml-2">Periode:</span>
-                    <input type="date" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})} className="text-xs bg-white border rounded px-2 py-1 text-slate-600"/>
+                 <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-lg border border-slate-200 w-full md:w-auto">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase ml-2 hidden md:inline">Periode:</span>
+                    <input type="date" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})} className="text-xs bg-white border rounded px-2 py-2 text-slate-600 flex-1"/>
                     <span className="text-slate-400">-</span>
-                    <input type="date" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})} className="text-xs bg-white border rounded px-2 py-1 text-slate-600"/>
+                    <input type="date" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})} className="text-xs bg-white border rounded px-2 py-2 text-slate-600 flex-1"/>
                  </div>
               </div>
 
-              <div className="flex items-center gap-4">
+              {/* Bottom Row: Summary Cards (Scrollable on Mobile) */}
+              <div className="flex overflow-x-auto gap-4 pb-2 md:pb-0 items-center no-scrollbar">
                  
-                 <div className="px-4 py-2 bg-amber-50 rounded-xl border border-amber-100 flex items-center gap-3">
-                    <div>
-                       <p className="text-[10px] text-amber-600 font-bold uppercase flex items-center gap-1"><Calculator size={10}/> Saldo Awal</p>
-                       <div className="flex items-center gap-1">
-                          <span className="text-xs text-amber-700 font-bold">Rp</span>
-                          <input 
-                             type="number" 
-                             className="bg-transparent border-b border-amber-300 w-28 text-sm font-bold text-amber-800 outline-none focus:border-amber-600"
-                             value={initialBalance}
-                             onChange={(e) => setInitialBalance(parseInt(e.target.value) || 0)}
-                             placeholder="0"
-                          />
-                       </div>
+                 <div className="px-4 py-2 bg-amber-50 rounded-xl border border-amber-100 flex-shrink-0">
+                    <p className="text-[10px] text-amber-600 font-bold uppercase flex items-center gap-1"><Calculator size={10}/> Saldo Awal</p>
+                    <div className="flex items-center gap-1 mt-1">
+                        <span className="text-xs text-amber-700 font-bold">Rp</span>
+                        <input 
+                            type="number" 
+                            className="bg-transparent border-b border-amber-300 w-24 text-sm font-bold text-amber-800 outline-none focus:border-amber-600"
+                            value={initialBalance}
+                            onChange={(e) => setInitialBalance(parseInt(e.target.value) || 0)}
+                            placeholder="0"
+                        />
                     </div>
                  </div>
 
-                 <div className="h-8 w-px bg-slate-200"></div>
+                 <div className="h-8 w-px bg-slate-200 hidden md:block"></div>
 
-                 <div className="px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-100">
+                 <div className="px-3 py-2 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0">
                     <p className="text-[10px] text-slate-400 font-bold uppercase">Mutasi Debit</p>
-                    <p className="font-bold text-emerald-600">{fmtMoney(ledgerData.totalDebit)}</p>
+                    <p className="font-bold text-emerald-600 text-sm">{fmtMoney(ledgerData.totalDebit)}</p>
                  </div>
-                 <div className="px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-100">
+                 <div className="px-3 py-2 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0">
                     <p className="text-[10px] text-slate-400 font-bold uppercase">Mutasi Kredit</p>
-                    <p className="font-bold text-rose-600">{fmtMoney(ledgerData.totalCredit)}</p>
+                    <p className="font-bold text-rose-600 text-sm">{fmtMoney(ledgerData.totalCredit)}</p>
                  </div>
-                 <div className="px-3 py-1.5 bg-blue-600 rounded-lg border border-blue-600 shadow-md">
+                 <div className="px-3 py-2 bg-blue-600 rounded-lg border border-blue-600 shadow-md flex-shrink-0">
                     <p className="text-[10px] text-blue-100 font-bold uppercase">Saldo Akhir</p>
-                    <p className="font-bold text-white">{fmtMoney(ledgerData.finalBalance)}</p>
+                    <p className="font-bold text-white text-sm">{fmtMoney(ledgerData.finalBalance)}</p>
                  </div>
               </div>
            </div>
 
-           {/* Table Area */}
-           <div className="flex-1 overflow-auto">
-              <table className="w-full text-left text-sm">
-                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold sticky top-0 z-10 border-b border-slate-100">
+           {/* Table Area (Scrollable X & Y) */}
+           <div className="flex-1 overflow-auto bg-slate-50/30">
+              <table className="w-full text-left text-sm min-w-[600px]"> {/* min-w forces horizontal scroll on mobile */}
+                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold sticky top-0 z-10 border-b border-slate-100 shadow-sm">
                     <tr>
                        <th className="p-4 w-[15%]">Tanggal</th>
                        <th className="p-4 w-[15%]">No. Ref</th>
@@ -383,28 +402,28 @@ export default function GeneralLedgerPage() {
                        <th className="p-4 w-[10%] text-right text-slate-800">Saldo</th>
                     </tr>
                  </thead>
-                 <tbody className="divide-y divide-slate-50">
+                 <tbody className="divide-y divide-slate-100 bg-white">
                     {loading ? (
                         <tr><td colSpan={6} className="p-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-600 mb-2"/> Menghitung Jurnal...</td></tr>
                     ) : ledgerData.entries.length === 0 ? (
-                       <tr><td colSpan={6} className="p-10 text-center text-slate-400">Belum ada transaksi di periode ini.</td></tr>
+                       <tr><td colSpan={6} className="p-10 text-center text-slate-400 italic">Belum ada transaksi di periode ini.</td></tr>
                     ) : (
                        ledgerData.entries.map((row, idx) => (
                           <tr key={idx} className="hover:bg-blue-50/30 transition-colors group">
-                             <td className="p-4 text-slate-600 font-medium">{row.date}</td>
+                             <td className="p-4 text-slate-600 font-medium whitespace-nowrap">{row.date}</td>
                              <td className="p-4">
-                                <span className="font-mono text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded cursor-pointer hover:bg-blue-100 hover:text-blue-600 flex items-center w-fit gap-1">
+                                <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded flex items-center w-fit gap-1 whitespace-nowrap">
                                    {row.ref}
                                 </span>
                              </td>
-                             <td className="p-4 text-slate-700">{row.desc}</td>
-                             <td className="p-4 text-right font-medium text-emerald-600">
+                             <td className="p-4 text-slate-700 min-w-[200px]">{row.desc}</td>
+                             <td className="p-4 text-right font-medium text-emerald-600 whitespace-nowrap">
                                 {row.debit > 0 ? fmtMoney(row.debit) : '-'}
                              </td>
-                             <td className="p-4 text-right font-medium text-rose-600">
+                             <td className="p-4 text-right font-medium text-rose-600 whitespace-nowrap">
                                 {row.credit > 0 ? fmtMoney(row.credit) : '-'}
                              </td>
-                             <td className="p-4 text-right font-bold text-slate-800 bg-slate-50/50">
+                             <td className="p-4 text-right font-bold text-slate-800 bg-slate-50/50 whitespace-nowrap">
                                 {fmtMoney(row.balance)}
                              </td>
                           </tr>
