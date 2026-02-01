@@ -9,7 +9,7 @@ import {
   FileText, Landmark, PenTool, ArrowUpRight, ArrowDownLeft
 } from 'lucide-react';
 
-import { fetchSheetData } from '@/lib/googleSheets';
+import { useFetch } from '@/hooks/useFetch'; // ✅ Hook Baru
 
 // --- HELPER: TERBILANG ---
 const terbilang = (nilai: number): string => {
@@ -51,8 +51,8 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]); 
   const [activeTab, setActiveTab] = useState<'sales' | 'purchase' | 'expense' | 'payments'>('sales');
-  const [loading, setLoading] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [isClient, setIsClient] = useState(false);
 
   // --- FILTER & GROUPING ---
   const [groupBy, setGroupBy] = useState<'none' | 'month' | 'partner' | 'product' | 'status' | 'debit_acc' | 'credit_acc'>('none');
@@ -98,40 +98,178 @@ export default function TransactionsPage() {
      paymentType: 'Payment In', refNumber: '', maxAmount: 0
   });
 
-  // --- 1. INIT LOAD ---
+  // --- 1. DATA FETCHING (API MULTI-TENANT) ---
+  const { data: apiData, loading, error } = useFetch<any>('/api/transactions');
+
+  // --- 2. DATA PARSER (RAW -> OBJECT) ---
+  const processSheetData = (rows: any[]) => {
+      if (!rows || rows.length < 2) return [];
+      const headers = rows[0].map((h: string) => h.trim()); 
+      return rows.slice(1).map((row) => {
+          let obj: any = {};
+          headers.forEach((header: string, index: number) => {
+              obj[header] = row[index] || ''; 
+          });
+          return obj;
+      });
+  };
+
+  // --- 3. LOAD & PROCESS DATA ---
   useEffect(() => {
-    const init = async () => {
-      try {
-        const [partners, products, coa] = await Promise.all([
-          fetchSheetData('Master_Partner'),
-          fetchSheetData('Master_Product'),
-          fetchSheetData('Master_COA')
-        ]);
-        setPartnersList(partners as any[]);
-        setProductList(products as any[]);
-        setCoaList(coa as any[]);
+    setIsClient(true);
+    if (typeof window !== 'undefined') {
+       const savedOverrides = localStorage.getItem('METALURGI_JOURNAL_OVERRIDES');
+       if (savedOverrides) setJournalOverrides(JSON.parse(savedOverrides));
+       
+       const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
+       if (savedLogo) setLogoUrl(savedLogo);
 
-        if (typeof window !== 'undefined') {
-           const savedOverrides = localStorage.getItem('METALURGI_JOURNAL_OVERRIDES');
-           if (savedOverrides) setJournalOverrides(JSON.parse(savedOverrides));
-           
-           const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
-           if (savedLogo) setLogoUrl(savedLogo);
-
-           const savedPrintConfig = localStorage.getItem('METALURGI_PRINT_CONFIG');
-           if (savedPrintConfig) setPrintConfig(JSON.parse(savedPrintConfig));
-        }
-      } catch (err) { console.error(err); }
-    };
-    init();
+       const savedPrintConfig = localStorage.getItem('METALURGI_PRINT_CONFIG');
+       if (savedPrintConfig) setPrintConfig(JSON.parse(savedPrintConfig));
+    }
   }, []);
 
-  // --- JOURNAL GENERATOR (FIXED FOR MANUAL PAYMENTS) ---
+  // Update State when API Data Arrives
+  useEffect(() => {
+    if (!apiData) return;
+
+    // A. Parse Master Data
+    const partners = processSheetData(apiData.partners);
+    const products = processSheetData(apiData.products);
+    const coa = processSheetData(apiData.coa);
+    
+    setPartnersList(partners);
+    setProductList(products);
+    setCoaList(coa);
+
+    // B. Parse Transaction Data
+    const trxSales = processSheetData(apiData.sales);
+    const trxPurchase = processSheetData(apiData.purchases);
+    const trxExpense = processSheetData(apiData.expenses);
+    const trxPayment = processSheetData(apiData.payments);
+
+    // C. Process Logic (Payment Map & Manual Merge)
+    const paymentMap: Record<string, number> = {};
+    trxPayment.forEach((p:any) => {
+      if (p.Ref_Number) paymentMap[p.Ref_Number] = (paymentMap[p.Ref_Number] || 0) + parseInt(p.Amount || 0);
+    });
+    
+    // Load Manual Data AND POS Data from LocalStorage
+    let manualTrx: any[] = [];
+    let manualPay: any[] = [];
+    let posTrx: any[] = []; // <-- Variable Baru
+
+    if (typeof window !== 'undefined') {
+       // 1. Load Manual Input
+       const savedManuals = localStorage.getItem('METALURGI_MANUAL_TRX');
+       if (savedManuals) {
+           const allManual = JSON.parse(savedManuals);
+           manualTrx = allManual.filter((t:any) => t.type !== 'Payment In' && t.type !== 'Payment Out');
+           manualPay = allManual.filter((t:any) => t.type === 'Payment In' || t.type === 'Payment Out');
+       }
+
+       // 2. Load POS Transactions (MISSING LINK)
+       const savedPos = localStorage.getItem('METALURGI_POS_TRX');
+       if (savedPos) {
+           const parsedPos = JSON.parse(savedPos);
+           // Mapping format POS agar sesuai dengan tabel Transactions
+           posTrx = parsedPos.map((p: any) => ({
+               uniqueKey: p.id,
+               id: p.id,
+               date: p.date,
+               dueDate: p.date, // POS biasanya cash, jadi due date sama
+               partner: 'Pelanggan Umum', // Atau ambil nama customer jika ada
+               product: p.items.length > 1 ? `${p.items[0].name} +${p.items.length-1} items` : p.items[0]?.name || 'Item POS',
+               type: 'sales', // POS dianggap Sales
+               desc: `POS Transaction (${p.paymentMethod})`,
+               amount: p.total,
+               amountPaid: p.amountPaid,
+               status: 'Fully Paid', // POS pasti lunas
+               qty: p.items.reduce((acc:number, item:any) => acc + item.qty, 0),
+               price: 0 // Gabungan
+           }));
+       }
+    }
+
+    // MAP SHEET PAYMENTS
+    const mappedPayments = trxPayment.map((p:any, i:number) => {
+      // @ts-ignore
+      const accName = coa.find((c:any) => c.Account_Code === p.Account_Code)?.Account_Name || p.Account_Code;
+      return {
+        uniqueKey: `PAY-${i}`, id: `PAY-${i}`, date: p.Trx_Date, ref: p.Ref_Number, type: p.Payment_Type || 'Payment In', 
+        sourceAccount: accName, amount: parseInt(p.Amount || 0), desc: p.Desc, partner: '-', status: 'Posted'
+      };
+    });
+    
+    setPayments([...mappedPayments, ...manualPay]);
+
+    // MAP SALES
+    const mappedSales = trxSales.map((row: any, idx: number) => {
+      const total = (parseInt(row.Qty||0) * parseInt(row.Unit_Price||0));
+      const paid = paymentMap[row.Inv_Number] || 0;
+      return {
+        uniqueKey: `SALES-${row.Inv_Number}-${idx}`, id: row.Inv_Number, date: row.Trx_Date, dueDate: row.Due_Date || '-',
+        partner: row.Partner_ID, product: row.Product_SKU, qty: parseInt(row.Qty||0), price: parseInt(row.Unit_Price||0),
+        type: 'sales', desc: `Penjualan ${row.Product_SKU}`, amount: total, amountPaid: paid, 
+        status: paid >= total ? 'Fully Paid' : paid > 0 ? 'Partial Paid' : 'Unpaid'
+      };
+    });
+
+    // MAP PURCHASE
+    const mappedPurchase = trxPurchase.map((row: any, idx: number) => {
+      const total = (parseInt(row.Qty||0) * parseInt(row.Unit_Cost||0));
+      const paid = paymentMap[row.Bill_Number] || 0;
+      return {
+        uniqueKey: `PURCH-${row.Bill_Number}-${idx}`, id: row.Bill_Number, date: row.Trx_Date, dueDate: row.Due_Date || '-',
+        partner: row.Partner_ID, product: row.Product_SKU, qty: parseInt(row.Qty||0), price: parseInt(row.Unit_Cost||0),
+        type: 'purchase', desc: `Pembelian ${row.Product_SKU}`, amount: total, amountPaid: paid, 
+        status: paid >= total ? 'Fully Paid' : paid > 0 ? 'Partial Paid' : 'Unpaid'
+      };
+    });
+
+    // MAP EXPENSE
+    const mappedExpense = trxExpense.map((row: any, idx: number) => ({
+      uniqueKey: `EXP-${idx}`, id: `EXP-${idx+1}`, date: row.Trx_Date, dueDate: row.Trx_Date,
+      partner: 'Internal', product: '-', type: 'expense', desc: row.Desc, 
+      amount: parseInt(row.Amount||0), amountPaid: parseInt(row.Amount||0), status: 'Fully Paid', items: [{account: row.Expense_Account}]
+    }));
+
+    // GABUNGKAN SEMUA: Manual + POS + Sheet Data
+    const allTrx = [...manualTrx, ...posTrx, ...mappedSales, ...mappedPurchase, ...mappedExpense];
+    setTransactions(allTrx);
+
+    // AUTO SYNC GL
+    if (typeof window !== 'undefined') {
+        const combinedAll = [...allTrx, ...mappedPayments, ...manualPay];
+        const glEntries: any[] = [];
+        
+        combinedAll.forEach(trx => {
+            const entries = generateJournal(trx);
+            entries.forEach(j => {
+                glEntries.push({
+                    source: 'Transaction', 
+                    id: `GL-${trx.id}-${j.pos}`, 
+                    date: trx.date, 
+                    ref: trx.id, 
+                    desc: trx.desc || `Transaction ${trx.id}`,
+                    debit_acc: j.pos === 'Debit' ? j.acc.code : '', 
+                    credit_acc: j.pos === 'Credit' ? j.acc.code : '', 
+                    amount: j.val
+                });
+            });
+        });
+        localStorage.setItem('METALURGI_GL_JOURNALS', JSON.stringify(glEntries));
+    }
+
+  }, [apiData]); // Only re-run when API data changes
+
+
+  // --- JOURNAL GENERATOR ---
   const generateJournal = (trx: any) => {
     if (journalOverrides[trx.id]) return journalOverrides[trx.id];
     
     const entries = [];
-    const total = parseFloat(trx.amount) || 0; // Ensure number
+    const total = parseFloat(trx.amount) || 0; 
 
     // 1. Sales
     if (trx.type === 'sales') {
@@ -151,129 +289,21 @@ export default function TransactionsPage() {
         entries.push({ pos: 'Debit', acc: { code: expAccCode, name: expAccName }, val: total });
         entries.push({ pos: 'Credit', acc: DEFAULT_ACCOUNTS.BANK, val: total });
     } 
-    // 4. Payment In / Out (Handles both Sheet and Manual)
+    // 4. Payment In / Out
     else if (trx.type === 'Payment In' || trx.type === 'Payment Out' || trx.type === 'IN' || trx.type === 'OUT') {
-        // Fallback default bank if no source account
         const bankAcc = trx.sourceAccount ? { code: '1-1002', name: trx.sourceAccount } : DEFAULT_ACCOUNTS.BANK;
-        
-        // Determine Direction
         const isIncoming = trx.type === 'Payment In' || trx.type === 'IN';
 
         if (isIncoming) {
-            // Uang Masuk: Debit Bank, Kredit Piutang (AR)
             entries.push({ pos: 'Debit', acc: bankAcc, val: total });
             entries.push({ pos: 'Credit', acc: DEFAULT_ACCOUNTS.AR, val: total });
         } else {
-            // Uang Keluar: Debit Hutang (AP), Kredit Bank
             entries.push({ pos: 'Debit', acc: DEFAULT_ACCOUNTS.AP_TRADE, val: total });
             entries.push({ pos: 'Credit', acc: bankAcc, val: total });
         }
     }
-
     return entries;
   };
-
-  // --- 2. LOAD TRANSACTIONS ---
-  const loadTransactions = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [trxSales, trxPurchase, trxExpense, trxPayment] = await Promise.all([
-        fetchSheetData('Trx_Sales_Invoice'),
-        fetchSheetData('Trx_Purchase_Invoice'),
-        fetchSheetData('Trx_Expense'),
-        fetchSheetData('Trx_Payment')
-      ]);
-
-      const paymentMap: Record<string, number> = {};
-      (trxPayment as any[]).forEach(p => {
-        if (p.Ref_Number) paymentMap[p.Ref_Number] = (paymentMap[p.Ref_Number] || 0) + parseInt(p.Amount || 0);
-      });
-      
-      // Load Manual Data
-      let manualTrx: any[] = [];
-      let manualPay: any[] = [];
-      if (typeof window !== 'undefined') {
-         const savedManuals = localStorage.getItem('METALURGI_MANUAL_TRX');
-         if (savedManuals) {
-             const allManual = JSON.parse(savedManuals);
-             manualTrx = allManual.filter((t:any) => t.type !== 'Payment In' && t.type !== 'Payment Out');
-             manualPay = allManual.filter((t:any) => t.type === 'Payment In' || t.type === 'Payment Out');
-         }
-      }
-
-      // MAP SHEET PAYMENTS
-      const mappedPayments = (trxPayment as any[]).map((p, i) => {
-        // @ts-ignore
-        const accName = coaList.find(c => c.Account_Code === p.Account_Code)?.Account_Name || p.Account_Code;
-        return {
-          uniqueKey: `PAY-${i}`, id: `PAY-${i}`, date: p.Trx_Date, ref: p.Ref_Number, type: p.Payment_Type || 'Payment In', 
-          sourceAccount: accName, amount: parseInt(p.Amount || 0), desc: p.Desc, partner: '-', status: 'Posted'
-        };
-      });
-      
-      // Merge Payments
-      setPayments([...mappedPayments, ...manualPay]);
-
-      // MAP TRANSACTIONS (Sheet)
-      const mappedSales = (trxSales as any[]).map((row: any, idx: number) => {
-        const total = (parseInt(row.Qty||0) * parseInt(row.Unit_Price||0));
-        const paid = paymentMap[row.Inv_Number] || 0;
-        return {
-          uniqueKey: `SALES-${row.Inv_Number}-${idx}`, id: row.Inv_Number, date: row.Trx_Date, dueDate: row.Due_Date || '-',
-          partner: row.Partner_ID, product: row.Product_SKU, qty: parseInt(row.Qty||0), price: parseInt(row.Unit_Price||0),
-          type: 'sales', desc: `Penjualan ${row.Product_SKU}`, amount: total, amountPaid: paid, 
-          status: paid >= total ? 'Fully Paid' : paid > 0 ? 'Partial Paid' : 'Unpaid'
-        };
-      });
-
-      const mappedPurchase = (trxPurchase as any[]).map((row: any, idx: number) => {
-        const total = (parseInt(row.Qty||0) * parseInt(row.Unit_Cost||0));
-        const paid = paymentMap[row.Bill_Number] || 0;
-        return {
-          uniqueKey: `PURCH-${row.Bill_Number}-${idx}`, id: row.Bill_Number, date: row.Trx_Date, dueDate: row.Due_Date || '-',
-          partner: row.Partner_ID, product: row.Product_SKU, qty: parseInt(row.Qty||0), price: parseInt(row.Unit_Cost||0),
-          type: 'purchase', desc: `Pembelian ${row.Product_SKU}`, amount: total, amountPaid: paid, 
-          status: paid >= total ? 'Fully Paid' : paid > 0 ? 'Partial Paid' : 'Unpaid'
-        };
-      });
-
-      const mappedExpense = (trxExpense as any[]).map((row: any, idx: number) => ({
-        uniqueKey: `EXP-${idx}`, id: `EXP-${idx+1}`, date: row.Trx_Date, dueDate: row.Trx_Date,
-        partner: 'Internal', product: '-', type: 'expense', desc: row.Desc, 
-        amount: parseInt(row.Amount||0), amountPaid: parseInt(row.Amount||0), status: 'Fully Paid', items: [{account: row.Expense_Account}]
-      }));
-
-      // Merge All
-      const allTrx = [...manualTrx, ...mappedSales, ...mappedPurchase, ...mappedExpense];
-      setTransactions(allTrx);
-
-      // AUTO SYNC GL
-      if (typeof window !== 'undefined') {
-          const combinedAll = [...allTrx, ...mappedPayments, ...manualPay];
-          const glEntries: any[] = [];
-          
-          combinedAll.forEach(trx => {
-              const entries = generateJournal(trx);
-              entries.forEach(j => {
-                  glEntries.push({
-                      source: 'Transaction', 
-                      id: `GL-${trx.id}-${j.pos}`, 
-                      date: trx.date, 
-                      ref: trx.id, 
-                      desc: trx.desc || `Transaction ${trx.id}`,
-                      debit_acc: j.pos === 'Debit' ? j.acc.code : '', 
-                      credit_acc: j.pos === 'Credit' ? j.acc.code : '', 
-                      amount: j.val
-                  });
-              });
-          });
-          localStorage.setItem('METALURGI_GL_JOURNALS', JSON.stringify(glEntries));
-      }
-
-    } catch (err) { console.error(err); } finally { setLoading(false); }
-  }, [coaList]);
-
-  useEffect(() => { if (coaList.length > 0) loadTransactions(); }, [loadTransactions, coaList]);
 
   const getPaymentPartner = (ref: string, defaultPartner: string) => {
       if (!ref || ref === '-') return defaultPartner;
@@ -382,7 +412,6 @@ export default function TransactionsPage() {
      const newOverrides = { ...journalOverrides, [journalModalData.trx.id]: journalModalData.journals };
      setJournalOverrides(newOverrides);
      localStorage.setItem('METALURGI_JOURNAL_OVERRIDES', JSON.stringify(newOverrides));
-     loadTransactions(); 
      alert("Jurnal Tersimpan & GL Terupdate!");
      setJournalModalData(null);
   };
@@ -422,6 +451,7 @@ export default function TransactionsPage() {
       setManualForm({...manualForm, price: val});
   };
 
+  // --- MANUAL SAVE HANDLER ---
   const handleSaveManual = () => {
     const isPayment = activeTab === 'payments';
     
@@ -441,7 +471,7 @@ export default function TransactionsPage() {
         price: manualForm.price, 
         amountPaid: 0, 
         status: isPayment ? 'Posted' : 'Unpaid',
-        sourceAccount: 'Bank BCA' // Explicitly set default source for journal
+        sourceAccount: 'Bank BCA' 
     };
 
     const existing = JSON.parse(localStorage.getItem('METALURGI_MANUAL_TRX') || '[]');
@@ -451,7 +481,7 @@ export default function TransactionsPage() {
     if (isPayment) setPayments(prev => [newTx, ...prev]);
     else setTransactions(prev => [newTx, ...prev]);
 
-    // Update GL Immediately for this new transaction
+    // Update GL Immediately
     if (typeof window !== 'undefined') {
         const glEntries = generateJournal(newTx).map(j => ({
             source: 'Transaction', id: `GL-${newTx.id}-${j.pos}`, date: newTx.date, ref: newTx.id, desc: newTx.desc,
@@ -475,6 +505,8 @@ export default function TransactionsPage() {
   const SortIcon = ({col}: {col: string}) => (sortConfig.key === col ? (sortConfig.direction === 'asc' ? <ChevronUp size={12}/> : <ChevronDown size={12}/>) : null);
   const SummarySortIcon = ({col}: {col: string}) => (summarySort.key === col ? (summarySort.direction === 'asc' ? <ChevronUp size={12}/> : <ChevronDown size={12}/>) : null);
 
+  if (!isClient) return null;
+
   return (
     <div className="space-y-6 pb-20 relative">
       {/* HEADER */}
@@ -483,12 +515,13 @@ export default function TransactionsPage() {
         <div className="flex gap-2">
            <button onClick={() => setShowProductSummary(true)} className="p-2 border rounded-lg hover:bg-slate-50 text-blue-600 border-blue-200 bg-blue-50 flex items-center gap-2 text-xs font-bold"><TrendingUp size={16}/> Product Summary</button>
            <button onClick={() => setShowPartnerSummary(true)} className="p-2 border rounded-lg hover:bg-slate-50 text-emerald-600 border-emerald-200 bg-emerald-50 flex items-center gap-2 text-xs font-bold"><Users size={16}/> Partner Summary</button>
-           <button onClick={loadTransactions} className="p-2 border rounded-lg hover:bg-slate-50 text-slate-600" title="Refresh Sheets"><RefreshCw size={20} className={loading ? 'animate-spin' : ''}/></button>
+           {/* REFRESH DIGANTI OTOMATIS OLEH HOOK, TAPI KITA BISA KEEP TOMBOLNYA SEBAGAI PLACEHOLDER ATAU RELOAD PAGE */}
+           <button onClick={() => window.location.reload()} className="p-2 border rounded-lg hover:bg-slate-50 text-slate-600" title="Refresh Sheets"><RefreshCw size={20}/></button>
            <button onClick={() => setIsNewTxModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white font-bold rounded-lg shadow-md"><Plus size={16}/> Input Manual</button>
         </div>
       </div>
 
-      {/* KPI CARDS */}
+      {/* KPI CARDS (Dihitung Real dari Data API) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print:hidden">
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase mb-1">Total Volume</p><h2 className="text-2xl font-bold text-slate-900">{fmtMoney(totals.amount)}</h2></div>
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase mb-1">Total Outstanding (Due)</p><h2 className="text-2xl font-bold text-rose-600">{fmtMoney(totals.amountDue)}</h2></div>
@@ -533,6 +566,9 @@ export default function TransactionsPage() {
         </div>
 
         <div className="overflow-x-auto min-h-[400px]">
+          {loading ? (
+             <div className="flex flex-col items-center justify-center py-20 text-slate-400"><Loader2 className="animate-spin mb-2"/><span className="text-xs">Loading Sheet Data...</span></div>
+          ) : (
           <table className="w-full text-left text-sm">
              <thead className="bg-white text-slate-500 text-xs uppercase font-bold border-b border-slate-100">
                <tr>
@@ -555,7 +591,8 @@ export default function TransactionsPage() {
                   return (
                   <Fragment key={groupKey}>
                      {groupBy !== 'none' && (<tr className="bg-slate-100"><td colSpan={10} className="p-2 px-4 font-bold text-xs text-slate-600 uppercase tracking-wider">{groupBy}: {groupKey} ({items.length})</td></tr>)}
-                     {items.map((row: any) => (
+                     {items.length === 0 ? <tr><td colSpan={10} className="p-8 text-center text-slate-400">No Transactions Found</td></tr> : 
+                     items.map((row: any) => (
                        <tr key={row.uniqueKey} className="hover:bg-slate-50 transition-colors">
                           <td className="p-4 font-mono text-xs font-bold text-slate-700">{row.id}</td>
                           <td className="p-4 text-slate-600 whitespace-nowrap">{row.date}</td>
@@ -589,11 +626,12 @@ export default function TransactionsPage() {
                )})}
              </tbody>
           </table>
+          )}
         </div>
       </div>
 
-      {/* --- MODALS (SUMMARY, PRINT, JOURNAL, MANUAL INPUT) KEPT INTACT --- */}
-      {/* (Copy pasted relevant modal code from V4.7, ensures all features are present) */}
+      {/* --- MODALS (SUMMARY, PRINT, JOURNAL, MANUAL INPUT) --- */}
+      {/* SEMUA LOGIC DI BAWAH INI SAMA PERSIS DENGAN KODE LAMA */}
       
       {showProductSummary && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in zoom-in-95 print:hidden">

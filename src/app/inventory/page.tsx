@@ -9,7 +9,7 @@ import {
   ChevronLeft, ChevronRight, Box as BoxIcon, FileBarChart
 } from 'lucide-react';
 
-import { fetchSheetData } from '@/lib/googleSheets';
+import { useFetch } from '@/hooks/useFetch'; // ✅ Hook Baru
 
 export default function InventoryPage() {
   
@@ -27,7 +27,6 @@ export default function InventoryPage() {
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
 
   // --- STATE DATA ---
-  const [loading, setLoading] = useState(true);
   const [masterProducts, setMasterProducts] = useState<any[]>([]);
   const [allMovements, setAllMovements] = useState<any[]>([]); 
   const [accountMapping, setAccountMapping] = useState<any[]>([]);
@@ -38,70 +37,84 @@ export default function InventoryPage() {
   const [stockPage, setStockPage] = useState(1); 
   const ITEMS_PER_PAGE = 100;
 
+  // --- 1. DATA FETCHING (NEW ARCHITECTURE) ---
+  const { data: apiData, loading, error } = useFetch<any>('/api/inventory');
+
+  // --- 2. DATA PARSER ---
+  const processSheetData = (rows: any[]) => {
+      if (!rows || rows.length < 2) return [];
+      const headers = rows[0].map((h: string) => h.trim()); 
+      return rows.slice(1).map((row) => {
+          let obj: any = {};
+          headers.forEach((header: string, index: number) => {
+              obj[header] = row[index] || ''; 
+          });
+          return obj;
+      });
+  };
+
+  // --- 3. CORE ENGINE: PROCESS DATA ---
+  useEffect(() => {
+    if (!apiData) return;
+
+    try {
+        // A. Parse API Data
+        const products = processSheetData(apiData.products);
+        const sheetMovements = processSheetData(apiData.movements);
+        const mapping = processSheetData(apiData.mapping);
+        const coa = processSheetData(apiData.coa);
+
+        setMasterProducts(products);
+        setAccountMapping(mapping);
+        setCoaList(coa);
+
+        // B. Fetch Data Lokal dari POS (REAL-TIME SYNC)
+        // Kita gabungkan data Sheet (Server) + Data Local (Belum Sync)
+        let localMoves: any[] = [];
+        if (typeof window !== 'undefined') {
+            const localMovesRaw = localStorage.getItem('METALURGI_INVENTORY_MOVEMENTS');
+            localMoves = localMovesRaw ? JSON.parse(localMovesRaw) : [];
+        }
+
+        const formattedLocalMoves = localMoves.map((m:any) => ({
+            Trx_Date: m.date,
+            Ref_Number: m.ref || m.id, 
+            Movement_Type: m.type, 
+            Product_SKU: m.sku,
+            Qty: m.qty,
+            Notes: 'Transaksi POS (Local)'
+        }));
+
+        // C. MERGE DATA MOVEMENT (Untuk Stok Fisik)
+        // Filter duplikat (jika data lokal sudah masuk ke sheet via sync)
+        const sheetRefs = new Set(sheetMovements.map((m: any) => m.Ref_Number));
+        const uniqueLocalMoves = formattedLocalMoves.filter((m:any) => !sheetRefs.has(m.Ref_Number));
+        
+        const mergedMovements = [...sheetMovements, ...uniqueLocalMoves];
+        setAllMovements(mergedMovements);
+
+    } catch (err) {
+        console.error("Failed processing inventory:", err);
+    }
+  }, [apiData]);
+
+
   // --- HELPER ---
   const fmtMoney = (val: number) => "Rp " + Math.round(val).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   
-  // Helper: Get Account Name (Robust String Comparison)
   const getAccName = (code: string) => {
       if (!coaList || coaList.length === 0) return code;
       const acc = coaList.find(c => {
+          // Robust comparison for code columns
           const cCode = c.KODE || c.Kode || c.Account_Code || c.Code || c.code;
           return String(cCode).trim() === String(code).trim();
       });
       if (acc) {
           const name = acc['NAMA AKUN'] || acc.NAMA_AKUN || acc.Nama_Akun || acc.Account_Name || acc.Name || acc.name || code;
-          return `${name}`; // Hanya mengembalikan nama akun sesuai request
+          return `${name}`; 
       }
       return code; 
   };
-
-  // --- 1. CORE ENGINE: LOAD & SYNC ---
-  useEffect(() => {
-    const initData = async () => {
-        setLoading(true);
-        try {
-            const [products, sheetMovements, mapping, coa] = await Promise.all([
-                fetchSheetData('Master_Product'),
-                fetchSheetData('Inv_Movement'),
-                fetchSheetData('Settings_Account_Mapping'),
-                fetchSheetData('Master_COA')
-            ]);
-
-            setMasterProducts(products as any[]);
-            setAccountMapping(mapping as any[]);
-            setCoaList(coa as any[]);
-
-            // B. Fetch Data Lokal dari POS
-            const localMovesRaw = localStorage.getItem('METALURGI_INVENTORY_MOVEMENTS');
-            const localMoves = localMovesRaw ? JSON.parse(localMovesRaw) : [];
-
-            const formattedLocalMoves = localMoves.map((m:any) => ({
-                Trx_Date: m.date,
-                Ref_Number: m.ref || m.id, 
-                Movement_Type: m.type, 
-                Product_SKU: m.sku,
-                Qty: m.qty,
-                Notes: 'Transaksi POS (Local)'
-            }));
-
-            // C. MERGE DATA MOVEMENT (Untuk Stok Fisik)
-            const sheetRefs = new Set((sheetMovements as any[]).map(m => m.Ref_Number));
-            const uniqueLocalMoves = formattedLocalMoves.filter((m:any) => !sheetRefs.has(m.Ref_Number));
-            const mergedMovements = [...(sheetMovements as any[]), ...uniqueLocalMoves];
-            setAllMovements(mergedMovements);
-
-            // NOTE: Auto-Generate GL dihapus di sini karena sudah ditangani modul POS & Transaction.
-            // Kita hanya akan membaca GL yang sudah ada saat view jurnal.
-
-        } catch (err) {
-            console.error("Failed loading inventory:", err);
-        } finally {
-            setLoading(false);
-        }
-    };
-    initData();
-  }, []);
-
 
   // --- 2. LOGIC STOCK VALUATION ---
   const valuationReport = useMemo(() => {
@@ -196,26 +209,14 @@ export default function InventoryPage() {
 
   // --- ACTIONS ---
   const handleViewJournal = (sku: string, name: string) => {
-      // REVISI: Ambil langsung dari METALURGI_GL_JOURNALS (Pusat Data GL)
       const glJournalsRaw = localStorage.getItem('METALURGI_GL_JOURNALS');
       
       if (glJournalsRaw) {
           const allGlJournals = JSON.parse(glJournalsRaw);
-          
-          // Filter jurnal yang berkaitan dengan SKU ini
-          // Asumsi: Jurnal di GL punya properti 'ref' atau 'desc' yang mengandung SKU/Nama Produk
-          // Atau lebih baik lagi jika saat generate jurnal di POS/Transaction, kita selipkan field 'sku' atau 'tags'
-          
-          // Strategi Filter: Cari yang 'sku' nya cocok (jika ada) ATAU deskripsinya mengandung nama produk
+          // Simple logic: Cari jurnal yang desc-nya mengandung nama produk
           const itemJournals = allGlJournals.filter((j: any) => {
-              // Cek field khusus sku (jika ada dari modul lain)
               if (j.sku && j.sku === sku) return true;
-              
-              // Fallback: Cek deskripsi mengandung nama produk
               if (j.desc && j.desc.toLowerCase().includes(name.toLowerCase())) return true;
-              
-              // Fallback 2: Cek Referensi sama dengan referensi movement item ini
-              // (Butuh lookup ke allMovements, agak berat, kita pakai desc dulu)
               return false;
           });
 
@@ -225,7 +226,7 @@ export default function InventoryPage() {
           setSelectedItemName(name);
           setShowJournalModal(true);
       } else {
-          // Fallback jika GL kosong, coba cek log inventory lama
+          // Fallback legacy logic
           const invJournalsRaw = localStorage.getItem('METALURGI_INVENTORY_JOURNALS');
           if(invJournalsRaw) {
              const jnls = JSON.parse(invJournalsRaw).filter((j:any) => j.sku === sku);
@@ -421,7 +422,7 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {/* --- MODAL ADJUSTMENT (TETAP ADA) --- */}
+      {/* --- MODAL ADJUSTMENT --- */}
       {showAdjustmentModal && (<div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl"><div className="p-6 border-b"><h3 className="font-bold">Stock Opname</h3></div><div className="p-6"><p>Fitur penyesuaian stok manual.</p></div><div className="p-6 border-t flex justify-end gap-3"><button onClick={() => setShowAdjustmentModal(false)} className="px-4 py-2 border rounded">Batal</button></div></div></div>)}
     </div>
   );
