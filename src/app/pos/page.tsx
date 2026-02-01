@@ -6,7 +6,7 @@ import {
   Store, LogOut, Printer, History, X, Save, RefreshCw, Loader2,
   FileText, User, Clock, Filter, Download, BookOpen, ChevronUp, ChevronDown, Calendar,
   CheckCircle2, Eye, AlertTriangle, TrendingUp, Package, Trophy, Image as ImageIcon,
-  FileDown, ClipboardList, Box 
+  FileDown, ClipboardList, Box, CloudUpload
 } from 'lucide-react';
 
 import { useFetch } from '@/hooks/useFetch'; 
@@ -17,6 +17,10 @@ export default function PosPage() {
   const [products, setProducts] = useState<any[]>([]);
   const [cart, setCart] = useState<any[]>([]);
   
+  // --- STATE USER & SYNC (NEW) ---
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
   // --- STATE MASTERS ---
   const [masterCashiers, setMasterCashiers] = useState<any[]>([]);
   const [masterShifts, setMasterShifts] = useState<any[]>([]);
@@ -73,7 +77,7 @@ export default function PosPage() {
   const [calculatedStockMap, setCalculatedStockMap] = useState<Record<string, number>>({});
   const [localSoldQtyMap, setLocalSoldQtyMap] = useState<Record<string, number>>({});
 
-  // --- 1. DATA FETCHING (NEW ARCHITECTURE) ---
+  // --- 1. DATA FETCHING ---
   const { data: apiData, loading, error } = useFetch<any>('/api/pos');
 
   // --- 2. DATA PARSER ---
@@ -95,6 +99,10 @@ export default function PosPage() {
     if (typeof window !== 'undefined') {
         const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
         if (savedLogo) setLogoPreview(savedLogo);
+
+        // Load User Session (NEW)
+        const storedUser = localStorage.getItem('METALURGI_USER_SESSION');
+        if (storedUser) setCurrentUser(JSON.parse(storedUser));
 
         // Load Shift History
         const savedShiftHistory = JSON.parse(localStorage.getItem('METALURGI_POS_SHIFT_HISTORY') || '[]');
@@ -135,21 +143,19 @@ export default function PosPage() {
         const rawProducts = processSheetData(apiData.products);
         const rawMovements = processSheetData(apiData.movements);
         const coa = processSheetData(apiData.coa);
-        const users = processSheetData(apiData.users); // NEW
-        const shifts = processSheetData(apiData.shifts); // NEW
+        const users = processSheetData(apiData.users); 
+        const shifts = processSheetData(apiData.shifts); 
 
         setProducts(rawProducts);
         setCoaList(coa);
         
         // --- SET MASTERS FROM API ---
-        // Jika Users kosong (Sheet Master_User belum ada), pakai fallback dummy
         if (users.length > 0) {
             setMasterCashiers(users);
         } else {
-            setMasterCashiers([{Name: 'Kasir 1'}, {Name: 'Kasir 2'}, {Name: 'Admin'}]); // Fallback
+            setMasterCashiers([{Name: 'Kasir 1'}, {Name: 'Kasir 2'}, {Name: 'Admin'}]); 
         }
 
-        // Jika Shifts kosong (Sheet Master_Shift belum ada), pakai fallback
         if (shifts.length > 0) {
             setMasterShifts(shifts);
         } else {
@@ -180,11 +186,10 @@ export default function PosPage() {
   }, [apiData]);
 
 
-  // --- HELPER & LOGIC (SAME AS BEFORE) ---
+  // --- HELPER & LOGIC ---
   const fmtMoney = (n: number) => "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   
   const getProductPromo = (sku: string, basePrice: number) => {
-      // Logic Promo sederhana (bisa dikembangkan nanti ambil dari sheet promo)
       return { hasPromo: false, finalPrice: basePrice, discountVal: 0, label: '', minQty: 1 };
   };
 
@@ -237,23 +242,6 @@ export default function PosPage() {
       setSortConfig({ key, direction });
   };
 
-  const dashboardStats = useMemo(() => {
-      const totalRevenue = filteredHistory.reduce((acc, trx) => acc + trx.total, 0);
-      const totalQty = filteredHistory.reduce((acc, trx) => acc + trx.items.reduce((a:any, b:any) => a + b.qty, 0), 0);
-      const productMap: Record<string, { name: string, qty: number, revenue: number }> = {};
-      filteredHistory.forEach(trx => {
-          trx.items.forEach((item: any) => {
-              if (!productMap[item.sku]) productMap[item.sku] = { name: item.name, qty: 0, revenue: 0 };
-              productMap[item.sku].qty += item.qty;
-              productMap[item.sku].revenue += (item.qty * item.price);
-          });
-      });
-      const productsArray = Object.values(productMap);
-      const topQty = [...productsArray].sort((a, b) => b.qty - a.qty).slice(0, 3);
-      const topRevenue = [...productsArray].sort((a, b) => b.revenue - a.revenue).slice(0, 3);
-      return { totalRevenue, totalQty, topQty, topRevenue };
-  }, [filteredHistory]);
-
   // --- ACTION HANDLERS ---
   const addToCart = (product: any) => {
      if (!isShiftOpen) { alert("Buka Shift Kasir terlebih dahulu!"); return setShowShiftModal(true); }
@@ -265,7 +253,6 @@ export default function PosPage() {
         const existing = prev.find(item => item.sku === product.SKU);
         let newQty = 1;
         if (existing) { newQty = existing.qty + 1; }
-        // Promo logic minimal (bisa dikembangkan)
         return existing ? prev.map(item => item.sku === product.SKU ? { ...item, qty: newQty } : item) : 
         [...prev, { sku: product.SKU, name: product.Product_Name, price: basePrice, originalPrice: basePrice, qty: 1, discount: 0, isPromo: false }];
      });
@@ -283,8 +270,46 @@ export default function PosPage() {
 
   const removeFromCart = (sku: string) => setCart(prev => prev.filter(i => i.sku !== sku));
   const cartTotal = useMemo(() => cart.reduce((acc, item) => acc + (item.price * item.qty), 0), [cart]);
-  const cartTotalSavings = useMemo(() => cart.reduce((acc, item) => acc + (item.discount * item.qty), 0), [cart]);
   const changeDue = amountPaid - cartTotal;
+
+  // --- SYNC TO CLOUD FUNCTION (NEW) ---
+  const handleSyncToCloud = async () => {
+      // 1. Ambil Data Lokal
+      const localData = localStorage.getItem('METALURGI_POS_TRX');
+      if (!localData) return alert("Belum ada data transaksi.");
+
+      const transactions = JSON.parse(localData);
+      if (transactions.length === 0) return alert("Data transaksi kosong.");
+
+      // 2. Konfirmasi
+      if(!confirm(`Upload ${transactions.length} transaksi ke Google Sheets?`)) return;
+
+      setIsSyncing(true);
+      try {
+          // 3. Tembak API
+          const res = await fetch('/api/pos/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                  // Fallback email jika guest, idealnya dari currentUser.email
+                  email: currentUser?.email || 'rina@cahaya.com', 
+                  transactions: transactions 
+              })
+          });
+
+          const json = await res.json();
+          if (json.success) {
+              alert(`✅ SUKSES: ${json.message}`);
+          } else {
+              alert(`❌ GAGAL: ${json.error}`);
+          }
+      } catch (err) {
+          alert("Gagal koneksi ke server.");
+          console.error(err);
+      } finally {
+          setIsSyncing(false);
+      }
+  };
 
   const handleExport = () => {
       if(filteredHistory.length === 0) return alert("Tidak ada data untuk diexport");
@@ -354,64 +379,34 @@ export default function PosPage() {
      setCurrentTrx(trx); setShowPaymentModal(false); setCart([]); setShowSuccessModal(true);
   };
 
-  // --- REVISI FUNGSI JOURNAL GENERATOR (LEBIH AMAN) ---
   const generatePOSJournals = (trx: any) => {
     try {
         const journals: any[] = [];
-        
-        // 1. Tentukan Akun Debit (Cash vs Bank)
-        // Pastikan kode akun ini SESUAI dengan Master COA Anda
         const debitAcc = trx.paymentMethod === 'Cash' ? '1-1001' : '1-1002'; 
         
-        // 2. Jurnal Sales (Debit Kas/Bank, Kredit Pendapatan)
         journals.push({ 
-            source: 'POS', 
-            id: `JNL-${trx.id}-SALES`, 
-            date: trx.date, 
-            ref: trx.id, 
-            desc: `Penjualan POS - ${trx.items.length} Items`, 
-            debit_acc: debitAcc, 
-            credit_acc: '4-1001', // Pastikan ini akun Pendapatan
-            amount: trx.total 
+            source: 'POS', id: `JNL-${trx.id}-SALES`, date: trx.date, ref: trx.id, 
+            desc: `Penjualan POS - ${trx.items.length} Items`, debit_acc: debitAcc, credit_acc: '4-1001', amount: trx.total 
         });
 
-        // 3. Jurnal HPP (Debit HPP, Kredit Persediaan)
         trx.items.forEach((item: any) => {
            const prod = products.find(p => p.SKU === item.sku);
            const cost = parseInt(prod?.Std_Cost_Budget || '0');
-           
            if (cost > 0) { 
                journals.push({ 
-                   source: 'POS', 
-                   id: `JNL-${trx.id}-COGS-${item.sku}`, 
-                   date: trx.date, 
-                   ref: trx.id, 
-                   desc: `HPP - ${item.name}`, 
-                   debit_acc: '5-1000', // Akun HPP
-                   credit_acc: '1-1300', // Akun Persediaan
-                   amount: cost * item.qty 
+                   source: 'POS', id: `JNL-${trx.id}-COGS-${item.sku}`, date: trx.date, ref: trx.id, 
+                   desc: `HPP - ${item.name}`, debit_acc: '5-1000', credit_acc: '1-1300', amount: cost * item.qty 
                }); 
            }
         });
         
-        // 4. SIMPAN KE LOCALSTORAGE (DENGAN SAFETY CHECK)
         const existingRaw = localStorage.getItem('METALURGI_GL_JOURNALS');
-        let existingGL = [];
-        try {
-           existingGL = existingRaw ? JSON.parse(existingRaw) : [];
-           if (!Array.isArray(existingGL)) existingGL = [];
-        } catch (e) {
-           existingGL = [];
-        }
-
-        const newGL = [...existingGL, ...journals];
-        localStorage.setItem('METALURGI_GL_JOURNALS', JSON.stringify(newGL));
-        
-        console.log("Jurnal POS Berhasil Disimpan:", journals); // Cek Console browser jika masih gagal
+        let existingGL = existingRaw ? JSON.parse(existingRaw) : [];
+        if (!Array.isArray(existingGL)) existingGL = [];
+        localStorage.setItem('METALURGI_GL_JOURNALS', JSON.stringify([...existingGL, ...journals]));
 
     } catch (err) {
         console.error("Gagal generate jurnal POS:", err);
-        alert("Warning: Jurnal transaksi gagal dibuat otomatis.");
     }
  };
 
@@ -433,24 +428,6 @@ export default function PosPage() {
       localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(updatedTrx));
       setAllTransactions(updatedTrx); 
       setShowSuccessModal(false); setPrintType('receipt'); setShowReceiptPreview(true);
-  };
-
-  const openJournalInspector = (trx: any) => {
-      const allJournals = JSON.parse(localStorage.getItem('METALURGI_GL_JOURNALS') || '[]');
-      const relatedJournals = allJournals.filter((j:any) => j.ref === trx.id);
-      setJournalEditorData({ trxId: trx.id, journals: JSON.parse(JSON.stringify(relatedJournals)) });
-      setShowJournalModal(true);
-  };
-  const updateJournalRow = (idx: number, field: string, value: any) => {
-      const updated = [...journalEditorData.journals]; updated[idx][field] = value;
-      setJournalEditorData({ ...journalEditorData, journals: updated });
-  };
-  const saveJournalChanges = () => {
-      if(!confirm("Simpan perubahan jurnal ke GL?")) return;
-      const allJournals = JSON.parse(localStorage.getItem('METALURGI_GL_JOURNALS') || '[]');
-      const otherJournals = allJournals.filter((j:any) => j.ref !== journalEditorData.trxId);
-      localStorage.setItem('METALURGI_GL_JOURNALS', JSON.stringify([...otherJournals, ...journalEditorData.journals]));
-      setShowJournalModal(false); alert("Jurnal Updated.");
   };
 
   const categories = ['All', ...Array.from(new Set(products.map(p => p.Category)))];
@@ -531,8 +508,60 @@ export default function PosPage() {
           {!isJasa && (<div className={`absolute top-2 left-2 px-2 py-0.5 rounded text-[10px] font-bold z-10 flex items-center gap-1 ${liveStock > 10 ? 'bg-emerald-100 text-emerald-700' : liveStock > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'}`}><Box size={10}/> {liveStock > 0 ? `${liveStock} Stok` : 'Habis'}</div>)}
           <div><div className="text-[10px] text-slate-400 mb-1 mt-6">{prod.Category}</div><div className="font-bold text-slate-800 text-sm leading-tight mb-2 line-clamp-2">{prod.Product_Name}</div></div><div className="mt-auto">{promo.hasPromo ? (<div className="flex flex-col"><span className="text-[10px] text-slate-400 line-through">{fmtMoney(parseInt(prod.Sell_Price_List))}</span><span className="text-rose-600 font-bold">{fmtMoney(promo.finalPrice)}</span></div>) : (<div className="text-blue-600 font-bold">{fmtMoney(parseInt(prod.Sell_Price_List))}</div>)}</div></div>); })}</div>}</div></div><div className="w-[350px] bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden"><div className="p-4 border-b border-slate-100 bg-slate-50"><h2 className="font-bold text-slate-800 flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h2></div><div className="flex-1 overflow-y-auto p-4 space-y-3">{cart.length === 0 ? (<div className="text-center text-slate-400 mt-10 flex flex-col items-center"><ShoppingCart size={40} className="mb-2 opacity-20"/><p className="text-sm">Keranjang Kosong</p></div>) : cart.map((item, i) => (<div key={i} className="flex justify-between items-start border-b border-slate-100 pb-2"><div className="flex-1"><div className="text-sm font-bold text-slate-800">{item.name}</div><div className="text-xs text-blue-600">{fmtMoney(item.price)}</div></div><div className="flex items-center gap-3"><div className="flex items-center gap-2 bg-slate-100 rounded-lg px-1"><button onClick={() => updateQty(item.sku, -1)} className="p-1 text-slate-500 hover:text-rose-600 font-bold">-</button><span className="text-xs font-bold w-4 text-center">{item.qty}</span><button onClick={() => updateQty(item.sku, 1)} className="p-1 text-slate-500 hover:text-emerald-600 font-bold">+</button></div><button onClick={() => removeFromCart(item.sku)} className="text-slate-300 hover:text-rose-500"><Trash2 size={16}/></button></div></div>))}</div><div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3"><div className="flex justify-between text-lg font-bold text-slate-900"><span>Total</span><span>{fmtMoney(cartTotal)}</span></div><button onClick={() => cartTotal > 0 && setShowPaymentModal(true)} disabled={cartTotal === 0} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all">Bayar Sekarang</button></div></div></div>)}
       
-      {/* VIEW 2: TRANSACTIONS (SAME) */}
-      {activeView === 'transactions' && (<div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col print:hidden"><div className="p-4 border-b border-slate-100 bg-white space-y-4"><div className="flex flex-wrap items-center gap-3"><div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200"><Calendar size={14} className="text-slate-400"/><span className="text-xs font-bold text-slate-500">From</span><input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/><span className="text-xs font-bold text-slate-500">To</span><input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/></div><select className="text-xs p-2 rounded-lg border border-slate-200" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}><option value="all">Semua Shift</option>{masterShifts.map((s,i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name}</option>)}</select><div className="flex-1 relative"><Search className="absolute left-3 top-2.5 text-slate-400" size={14}/><input type="text" placeholder="Cari..." className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200" value={historySearch} onChange={e => setHistorySearch(e.target.value)}/></div></div></div><div className="flex-1 overflow-auto p-0"><table className="w-full text-sm text-left"><thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10"><tr><th className="p-4">No. Transaksi</th><th className="p-4">Waktu</th><th className="p-4">Produk</th><th className="p-4 text-center">Qty</th><th className="p-4 text-right">Total (Rp)</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{filteredHistory.map((trx, idx) => (<tr key={idx} className="hover:bg-blue-50/50"><td className="p-4 font-mono font-bold text-xs text-slate-600 align-top">{trx.id}</td><td className="p-4 text-slate-500 text-xs align-top"><div>{trx.date}</div><div>{trx.timestamp}</div></td><td className="p-4 align-top"><div className="flex flex-col gap-1">{trx.items.map((it:any, i:number) => (<span key={i} className="text-xs text-slate-700">• {it.name} <span className="text-slate-400">x{it.qty}</span></span>))}</div></td><td className="p-4 text-center font-bold align-top">{trx.items.reduce((a:any,b:any)=>a+b.qty,0)}</td><td className="p-4 text-right font-bold text-slate-900 align-top">{fmtMoney(trx.total)}</td><td className="p-4 text-center align-top"><button onClick={() => { setCurrentTrx(trx); setPrintType('receipt'); setShowReceiptPreview(true); }} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-slate-800" title="Preview & Print"><Printer size={16}/></button></td></tr>))}</tbody></table></div></div>)}
+      {/* VIEW 2: TRANSACTIONS (ADDED SYNC BUTTON) */}
+      {activeView === 'transactions' && (
+        <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col print:hidden">
+            <div className="p-4 border-b border-slate-100 bg-white space-y-4">
+                <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
+                        <Calendar size={14} className="text-slate-400"/>
+                        <span className="text-xs font-bold text-slate-500">From</span>
+                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
+                        <span className="text-xs font-bold text-slate-500">To</span>
+                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                    </div>
+                    <select className="text-xs p-2 rounded-lg border border-slate-200" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}>
+                        <option value="all">Semua Shift</option>{masterShifts.map((s,i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name}</option>)}
+                    </select>
+                    
+                    {/* BUTTON SYNC TO CLOUD */}
+                    <button 
+                        onClick={handleSyncToCloud}
+                        disabled={isSyncing}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-sm ${isSyncing ? 'bg-slate-100 text-slate-400' : 'bg-emerald-500 hover:bg-emerald-600 text-white'}`}
+                    >
+                        {isSyncing ? <Loader2 size={14} className="animate-spin"/> : <CloudUpload size={14}/>}
+                        {isSyncing ? 'Uploading...' : 'Sync to Cloud'}
+                    </button>
+
+                    <div className="flex-1 relative">
+                        <Search className="absolute left-3 top-2.5 text-slate-400" size={14}/>
+                        <input type="text" placeholder="Cari..." className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200" value={historySearch} onChange={e => setHistorySearch(e.target.value)}/>
+                    </div>
+                </div>
+            </div>
+            
+            <div className="flex-1 overflow-auto p-0">
+                <table className="w-full text-sm text-left">
+                    <thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10">
+                        <tr><th className="p-4">No. Transaksi</th><th className="p-4">Waktu</th><th className="p-4">Produk</th><th className="p-4 text-center">Qty</th><th className="p-4 text-right">Total (Rp)</th><th className="p-4 text-center">Action</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                        {filteredHistory.map((trx, idx) => (
+                            <tr key={idx} className="hover:bg-blue-50/50">
+                                <td className="p-4 font-mono font-bold text-xs text-slate-600 align-top">{trx.id}</td>
+                                <td className="p-4 text-slate-500 text-xs align-top"><div>{trx.date}</div><div>{trx.timestamp}</div></td>
+                                <td className="p-4 align-top"><div className="flex flex-col gap-1">{trx.items.map((it:any, i:number) => (<span key={i} className="text-xs text-slate-700">• {it.name} <span className="text-slate-400">x{it.qty}</span></span>))}</div></td>
+                                <td className="p-4 text-center font-bold align-top">{trx.items.reduce((a:any,b:any)=>a+b.qty,0)}</td>
+                                <td className="p-4 text-right font-bold text-slate-900 align-top">{fmtMoney(trx.total)}</td>
+                                <td className="p-4 text-center align-top"><button onClick={() => { setCurrentTrx(trx); setPrintType('receipt'); setShowReceiptPreview(true); }} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-slate-800" title="Preview & Print"><Printer size={16}/></button></td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+      )}
 
       {/* VIEW 3: SHIFTS (SAME) */}
       {activeView === 'shifts' && (<div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col print:hidden"><div className="p-4 border-b border-slate-100 bg-slate-50"><h3 className="font-bold text-slate-800 flex items-center gap-2"><ClipboardList size={18}/> Riwayat Shift Kasir</h3></div><div className="flex-1 overflow-auto p-0"><table className="w-full text-sm text-left"><thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10"><tr><th className="p-4">Tanggal</th><th className="p-4">Shift</th><th className="p-4 text-right">Total Penjualan</th><th className="p-4 text-right">Fisik Akhir</th><th className="p-4 text-right">Selisih</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{shiftHistory.map((s, i) => (<tr key={i} className="hover:bg-blue-50"><td className="p-4 font-mono text-xs">{new Date(s.startTime).toLocaleDateString()}</td><td className="p-4 font-bold text-slate-700">{s.shiftName} / {s.cashierName}</td><td className="p-4 text-right font-bold text-emerald-600">{fmtMoney(s.totalSales)}</td><td className="p-4 text-right font-bold">{fmtMoney(s.endCashActual)}</td><td className={`p-4 text-right font-bold ${s.variance < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{fmtMoney(s.variance)}</td><td className="p-4 text-center"><button onClick={() => { setShiftReportData(s); setPrintType('shift_report'); setShowReceiptPreview(true); }} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-blue-600"><Printer size={16}/></button></td></tr>))}</tbody></table></div></div>)}
