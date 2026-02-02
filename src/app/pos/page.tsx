@@ -3,9 +3,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { 
   Search, ShoppingCart, Trash2, CreditCard, Banknote, QrCode, 
-  Store, LogOut, Printer, History, X, Save, RefreshCw, Loader2,
-  FileText, User, Clock, Filter, Download, BookOpen, ChevronUp, ChevronDown, Calendar,
-  CheckCircle2, Eye, AlertTriangle, TrendingUp, Package, Trophy, Image as ImageIcon,
+  Store, LogOut, Printer, X, Loader2,
+  User, Clock, Calendar, CheckCircle2,
   FileDown, ClipboardList, Box, CloudUpload
 } from 'lucide-react';
 
@@ -17,16 +16,16 @@ export default function PosPage() {
   const [products, setProducts] = useState<any[]>([]);
   const [cart, setCart] = useState<any[]>([]);
   
-  // --- STATE USER & SYNC (NEW) ---
+  // --- STATE USER & SYNC ---
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
   // --- STATE MASTERS ---
   const [masterCashiers, setMasterCashiers] = useState<any[]>([]);
   const [masterShifts, setMasterShifts] = useState<any[]>([]);
-  const [activePromos, setActivePromos] = useState<any[]>([]);
   const [receiptConfig, setReceiptConfig] = useState<any>({});
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [coaList, setCoaList] = useState<any[]>([]);
 
   // --- STATE SHIFT & CLOSING ---
@@ -58,16 +57,15 @@ export default function PosPage() {
 
   // --- STATE HISTORY & FILTER ---
   const [allTransactions, setAllTransactions] = useState<any[]>([]);
-  const [dateRange, setDateRange] = useState({ start: new Date().toISOString().split('T')[0], end: new Date().toISOString().split('T')[0] });
-  const [methodFilter, setMethodFilter] = useState('all');
+  const [dateRange, setDateRange] = useState({ 
+    start: new Date().toISOString().split('T')[0], 
+    end: new Date().toISOString().split('T')[0] 
+  });
   const [shiftFilter, setShiftFilter] = useState('all');
-  const [cashierFilter, setCashierFilter] = useState('all');
   const [historySearch, setHistorySearch] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'timestamp', direction: 'desc' });
 
   // --- STATE MISC ---
-  const [showJournalModal, setShowJournalModal] = useState(false);
-  const [journalEditorData, setJournalEditorData] = useState<any>(null);
   const [printType, setPrintType] = useState<'receipt' | 'shift_report' | null>(null);
   const [shiftReportData, setShiftReportData] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -78,7 +76,7 @@ export default function PosPage() {
   const [localSoldQtyMap, setLocalSoldQtyMap] = useState<Record<string, number>>({});
 
   // --- 1. DATA FETCHING ---
-  const { data: apiData, loading, error } = useFetch<any>('/api/pos');
+  const { data: apiData, loading } = useFetch<any>('/api/pos');
 
   // --- 2. DATA PARSER ---
   const processSheetData = (rows: any[]) => {
@@ -100,7 +98,7 @@ export default function PosPage() {
         const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
         if (savedLogo) setLogoPreview(savedLogo);
 
-        // Load User Session (NEW)
+        // Load User Session
         const storedUser = localStorage.getItem('METALURGI_USER_SESSION');
         if (storedUser) setCurrentUser(JSON.parse(storedUser));
 
@@ -190,6 +188,7 @@ export default function PosPage() {
   const fmtMoney = (n: number) => "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   
   const getProductPromo = (sku: string, basePrice: number) => {
+      // Logic promo bisa dikembangkan di sini
       return { hasPromo: false, finalPrice: basePrice, discountVal: 0, label: '', minQty: 1 };
   };
 
@@ -213,10 +212,8 @@ export default function PosPage() {
           return tDate >= start && tDate <= end; 
       });
 
-      if (methodFilter !== 'all') data = data.filter(t => t.paymentMethod === methodFilter);
       if (shiftFilter !== 'all') data = data.filter(t => t.shift === shiftFilter);
-      if (cashierFilter !== 'all') data = data.filter(t => t.cashier === cashierFilter);
-
+      
       if (historySearch) { 
           const lower = historySearch.toLowerCase(); 
           data = data.filter(t => t.id.toLowerCase().includes(lower) || t.items.some((i:any) => i.name.toLowerCase().includes(lower)));
@@ -234,13 +231,7 @@ export default function PosPage() {
           return 0;
       });
       return data;
-  }, [allTransactions, dateRange, methodFilter, shiftFilter, cashierFilter, historySearch, sortConfig]);
-
-  const requestSort = (key: string) => { 
-      let direction: 'asc' | 'desc' = 'asc';
-      if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
-      setSortConfig({ key, direction });
-  };
+  }, [allTransactions, dateRange, shiftFilter, historySearch, sortConfig]);
 
   // --- ACTION HANDLERS ---
   const addToCart = (product: any) => {
@@ -272,7 +263,7 @@ export default function PosPage() {
   const cartTotal = useMemo(() => cart.reduce((acc, item) => acc + (item.price * item.qty), 0), [cart]);
   const changeDue = amountPaid - cartTotal;
 
-  // --- SYNC TO CLOUD FUNCTION (NEW) ---
+  // --- [REVISI PENTING 1] SYNC TO CLOUD FUNCTION ---
   const handleSyncToCloud = async () => {
       // 1. Ambil Data Lokal
       const localData = localStorage.getItem('METALURGI_POS_TRX');
@@ -281,18 +272,22 @@ export default function PosPage() {
       const transactions = JSON.parse(localData);
       if (transactions.length === 0) return alert("Data transaksi kosong.");
 
-      // 2. Konfirmasi
-      if(!confirm(`Upload ${transactions.length} transaksi ke Google Sheets?`)) return;
+      // 2. VALIDASI SESI USER (Penting: Jangan pakai fallback email lagi)
+      if (!currentUser || !currentUser.email) {
+          return alert("⚠️ GAGAL: Sesi user tidak valid. Silakan Logout dan Login kembali agar sistem mengenali kasir.");
+      }
+
+      // 3. Konfirmasi
+      if(!confirm(`Upload ${transactions.length} transaksi ke Cloud atas nama ${currentUser.email}?`)) return;
 
       setIsSyncing(true);
       try {
-          // 3. Tembak API
           const res = await fetch('/api/pos/sync', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
-                  // Fallback email jika guest, idealnya dari currentUser.email
-                  email: currentUser?.email || 'rina@cahaya.com', 
+                  // Pastikan email ini valid dari session
+                  email: currentUser.email, 
                   transactions: transactions 
               })
           });
@@ -301,10 +296,11 @@ export default function PosPage() {
           if (json.success) {
               alert(`✅ SUKSES: ${json.message}`);
           } else {
+              // Menampilkan detail error dari server (User not found dsb)
               alert(`❌ GAGAL: ${json.error}`);
           }
       } catch (err) {
-          alert("Gagal koneksi ke server.");
+          alert("Gagal koneksi ke server. Cek koneksi internet.");
           console.error(err);
       } finally {
           setIsSyncing(false);
@@ -359,13 +355,26 @@ export default function PosPage() {
      setShiftReportData(closingData); setPrintType('shift_report'); setShowReceiptPreview(true);
   };
 
+  // --- [REVISI PENTING 2] PROSES PEMBAYARAN (Format Tanggal) ---
   const handleProcessPayment = () => {
      if (amountPaid < cartTotal && paymentMethod === 'Cash') return alert("Uang pembayaran kurang!");
+     
      const trx = {
         id: `POS-${Math.floor(Math.random()*1000000)}`,
-        date: new Date().toISOString().split('T')[0], timestamp: new Date().toLocaleTimeString(), items: cart, total: cartTotal,
-        paymentMethod, amountPaid, change: Math.max(0, changeDue), cashier: shiftData.cashierName, shift: shiftData.shiftName, shiftId: shiftData.id, isPrinted: false
+        // Ubah ke format ISO penuh agar API tidak bingung saat split
+        date: new Date().toISOString(), 
+        timestamp: new Date().toLocaleTimeString(), 
+        items: cart, 
+        total: cartTotal,
+        paymentMethod, 
+        amountPaid, 
+        change: Math.max(0, changeDue), 
+        cashier: shiftData.cashierName, 
+        shift: shiftData.shiftName, 
+        shiftId: shiftData.id, 
+        isPrinted: false
      };
+
      const posHistory = JSON.parse(localStorage.getItem('METALURGI_POS_TRX') || '[]');
      const newHistory = [trx, ...posHistory];
      localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(newHistory));
@@ -383,9 +392,10 @@ export default function PosPage() {
     try {
         const journals: any[] = [];
         const debitAcc = trx.paymentMethod === 'Cash' ? '1-1001' : '1-1002'; 
+        const dateStr = trx.date.split('T')[0]; // Safe split untuk lokal
         
         journals.push({ 
-            source: 'POS', id: `JNL-${trx.id}-SALES`, date: trx.date, ref: trx.id, 
+            source: 'POS', id: `JNL-${trx.id}-SALES`, date: dateStr, ref: trx.id, 
             desc: `Penjualan POS - ${trx.items.length} Items`, debit_acc: debitAcc, credit_acc: '4-1001', amount: trx.total 
         });
 
@@ -394,7 +404,7 @@ export default function PosPage() {
            const cost = parseInt(prod?.Std_Cost_Budget || '0');
            if (cost > 0) { 
                journals.push({ 
-                   source: 'POS', id: `JNL-${trx.id}-COGS-${item.sku}`, date: trx.date, ref: trx.id, 
+                   source: 'POS', id: `JNL-${trx.id}-COGS-${item.sku}`, date: dateStr, ref: trx.id, 
                    desc: `HPP - ${item.name}`, debit_acc: '5-1000', credit_acc: '1-1300', amount: cost * item.qty 
                }); 
            }
@@ -411,7 +421,8 @@ export default function PosPage() {
  };
 
   const updateInventoryStock = (trx: any) => {
-     const moves = trx.items.map((item: any) => ({ id: `MOV-POS-${trx.id}-${item.sku}`, date: trx.date, type: 'OUT', sku: item.sku, qty: item.qty, cost: 0, ref: trx.id }));
+     const dateStr = trx.date.split('T')[0];
+     const moves = trx.items.map((item: any) => ({ id: `MOV-POS-${trx.id}-${item.sku}`, date: dateStr, type: 'OUT', sku: item.sku, qty: item.qty, cost: 0, ref: trx.id }));
      const existingMoves = JSON.parse(localStorage.getItem('METALURGI_INVENTORY_MOVEMENTS') || '[]');
      const newMoves = [...existingMoves, ...moves];
      localStorage.setItem('METALURGI_INVENTORY_MOVEMENTS', JSON.stringify(newMoves));
@@ -473,7 +484,7 @@ export default function PosPage() {
              <h2 className="font-bold text-sm uppercase">{receiptConfig.Store_Name || 'Metalurgi POS'}</h2>
              <div className="mt-2 text-left border-t border-black border-dashed pt-2">
                  <div className="flex justify-between"><span>Trx:</span> <span>{trx.id}</span></div>
-                 <div className="flex justify-between"><span>Date:</span> <span>{trx.date} {trx.timestamp}</span></div>
+                 <div className="flex justify-between"><span>Date:</span> <span>{trx.date.split('T')[0]} {trx.timestamp}</span></div>
                  <div className="flex justify-between"><span>Kasir:</span> <span>{trx.cashier}</span></div>
                  <div className="flex justify-between"><span>Shift:</span> <span>{trx.shift}</span></div>
                  <div className="flex justify-between"><span>Metode:</span> <span>{trx.paymentMethod}</span></div>
@@ -508,7 +519,7 @@ export default function PosPage() {
           {!isJasa && (<div className={`absolute top-2 left-2 px-2 py-0.5 rounded text-[10px] font-bold z-10 flex items-center gap-1 ${liveStock > 10 ? 'bg-emerald-100 text-emerald-700' : liveStock > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'}`}><Box size={10}/> {liveStock > 0 ? `${liveStock} Stok` : 'Habis'}</div>)}
           <div><div className="text-[10px] text-slate-400 mb-1 mt-6">{prod.Category}</div><div className="font-bold text-slate-800 text-sm leading-tight mb-2 line-clamp-2">{prod.Product_Name}</div></div><div className="mt-auto">{promo.hasPromo ? (<div className="flex flex-col"><span className="text-[10px] text-slate-400 line-through">{fmtMoney(parseInt(prod.Sell_Price_List))}</span><span className="text-rose-600 font-bold">{fmtMoney(promo.finalPrice)}</span></div>) : (<div className="text-blue-600 font-bold">{fmtMoney(parseInt(prod.Sell_Price_List))}</div>)}</div></div>); })}</div>}</div></div><div className="w-[350px] bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden"><div className="p-4 border-b border-slate-100 bg-slate-50"><h2 className="font-bold text-slate-800 flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h2></div><div className="flex-1 overflow-y-auto p-4 space-y-3">{cart.length === 0 ? (<div className="text-center text-slate-400 mt-10 flex flex-col items-center"><ShoppingCart size={40} className="mb-2 opacity-20"/><p className="text-sm">Keranjang Kosong</p></div>) : cart.map((item, i) => (<div key={i} className="flex justify-between items-start border-b border-slate-100 pb-2"><div className="flex-1"><div className="text-sm font-bold text-slate-800">{item.name}</div><div className="text-xs text-blue-600">{fmtMoney(item.price)}</div></div><div className="flex items-center gap-3"><div className="flex items-center gap-2 bg-slate-100 rounded-lg px-1"><button onClick={() => updateQty(item.sku, -1)} className="p-1 text-slate-500 hover:text-rose-600 font-bold">-</button><span className="text-xs font-bold w-4 text-center">{item.qty}</span><button onClick={() => updateQty(item.sku, 1)} className="p-1 text-slate-500 hover:text-emerald-600 font-bold">+</button></div><button onClick={() => removeFromCart(item.sku)} className="text-slate-300 hover:text-rose-500"><Trash2 size={16}/></button></div></div>))}</div><div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3"><div className="flex justify-between text-lg font-bold text-slate-900"><span>Total</span><span>{fmtMoney(cartTotal)}</span></div><button onClick={() => cartTotal > 0 && setShowPaymentModal(true)} disabled={cartTotal === 0} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all">Bayar Sekarang</button></div></div></div>)}
       
-      {/* VIEW 2: TRANSACTIONS (ADDED SYNC BUTTON) */}
+      {/* VIEW 2: TRANSACTIONS */}
       {activeView === 'transactions' && (
         <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col print:hidden">
             <div className="p-4 border-b border-slate-100 bg-white space-y-4">
@@ -550,7 +561,7 @@ export default function PosPage() {
                         {filteredHistory.map((trx, idx) => (
                             <tr key={idx} className="hover:bg-blue-50/50">
                                 <td className="p-4 font-mono font-bold text-xs text-slate-600 align-top">{trx.id}</td>
-                                <td className="p-4 text-slate-500 text-xs align-top"><div>{trx.date}</div><div>{trx.timestamp}</div></td>
+                                <td className="p-4 text-slate-500 text-xs align-top"><div>{trx.date.split('T')[0]}</div><div>{trx.timestamp}</div></td>
                                 <td className="p-4 align-top"><div className="flex flex-col gap-1">{trx.items.map((it:any, i:number) => (<span key={i} className="text-xs text-slate-700">• {it.name} <span className="text-slate-400">x{it.qty}</span></span>))}</div></td>
                                 <td className="p-4 text-center font-bold align-top">{trx.items.reduce((a:any,b:any)=>a+b.qty,0)}</td>
                                 <td className="p-4 text-right font-bold text-slate-900 align-top">{fmtMoney(trx.total)}</td>
