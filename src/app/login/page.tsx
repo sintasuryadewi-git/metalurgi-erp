@@ -2,13 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Lock, User, Loader2, Shield, Users } from 'lucide-react';
+import { Lock, User, Loader2, Shield, Users, Eye, EyeOff } from 'lucide-react'; // Import Icon Eye
 import { seedDemoData } from '@/lib/demoData'; 
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false); // State untuk toggle password
   const [loading, setLoading] = useState(false);
   
   // State untuk mendeteksi Mode Demo
@@ -22,7 +23,6 @@ export default function LoginPage() {
   }, []);
 
   // --- LOGIC 1: COMMERCIAL LOGIN (Cek ke Google Sheet) ---
-  // ... import dan kode lainnya tetap sama
   const handleCommercialLogin = async () => {
     if(!email || !password) return alert("Mohon isi email dan password");
     
@@ -38,24 +38,23 @@ export default function LoginPage() {
         
         if(!res.ok) throw new Error(data.error || "Login Gagal");
 
-        // --- [NEW] BERSIH-BERSIH DATA LAMA ---
-        // Kita hapus semua data transaksi lokal supaya bersih 0
+        // --- BERSIH-BERSIH DATA LAMA ---
         localStorage.removeItem('METALURGI_GL_JOURNALS');
         localStorage.removeItem('METALURGI_MANUAL_TRX');
         localStorage.removeItem('METALURGI_DEMO_EMPLOYEES');
-        localStorage.removeItem('METALURGI_IS_DEMO_DATA'); // Hapus flag demo
+        localStorage.removeItem('METALURGI_IS_DEMO_DATA');
 
-        // --- SIMPAN SESI BARU ---
-        localStorage.setItem('METALURGI_USER', JSON.stringify(data.user));
-        
-        // Cek status aktivasi dari respon server (nanti kita update API loginnya)
-        // Jika belum aktif, set false.
+        // --- SIMPAN SESI BARU (Sesuai dengan nama user yang login) ---
+        // Simpan Data User Lengkap (Email, Role, Name)
+        localStorage.setItem('METALURGI_USER', JSON.stringify(data.user)); 
+        // Simpan Email Owner untuk keperluan Sync POS nanti
+        localStorage.setItem('METALURGI_USER_SESSION', JSON.stringify({ email: data.user.email, role: data.user.role }));
+
         const isLicenseActive = data.isActivated || false; 
         localStorage.setItem('METALURGI_ACTIVATED', isLicenseActive.toString());
         
-        // Redirect
         if (!isLicenseActive) {
-            router.push('/setup'); // Paksa ke aktivasi jika belum punya lisensi
+            router.push('/setup'); 
         } else {
             router.push('/');
         }
@@ -70,17 +69,17 @@ export default function LoginPage() {
   // --- LOGIC 2: DEMO LOGIN (Tanpa Password) ---
   const handleDemoLogin = (role: string) => {
       setLoading(true);
-      seedDemoData(); // Masukkan data dummy
+      seedDemoData(); 
       
       let user = {};
-      // Set user dummy sesuai role
       if (role === 'OWNER') user = { name: 'Demo CEO', role: 'OWNER', email: 'ceo@demo.com' };
       else if (role === 'INVESTOR') user = { name: 'Demo Investor', role: 'INVESTOR', email: 'vc@demo.com' };
       
       localStorage.setItem('METALURGI_USER', JSON.stringify(user));
+      // Simpan session dummy juga agar POS tidak error
+      localStorage.setItem('METALURGI_USER_SESSION', JSON.stringify({ email: 'ceo@demo.com', role: 'OWNER' }));
       localStorage.setItem('METALURGI_ACTIVATED', 'true'); 
       
-      // Redirect sesuai role
       setTimeout(() => {
           if (role === 'INVESTOR') router.push('/investor');
           else router.push('/');
@@ -91,7 +90,6 @@ export default function LoginPage() {
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans">
       <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md relative overflow-hidden">
         
-        {/* Banner Pita Demo (Hanya muncul jika mode DEMO) */}
         {isDemo && (
             <div className="absolute top-0 right-0 bg-amber-400 text-amber-900 text-[10px] font-bold px-8 py-1 rotate-45 translate-x-8 translate-y-4 shadow-sm">
                 DEMO MODE
@@ -104,7 +102,6 @@ export default function LoginPage() {
             <p className="text-slate-500 text-sm">{isDemo ? 'Pilih peran untuk simulasi fitur.' : 'Sign in to Command Center'}</p>
         </div>
 
-        {/* TAMPILAN 1: MODE DEMO (Tombol Langsung) */}
         {isDemo ? (
             <div className="space-y-3">
                 <button onClick={() => handleDemoLogin('OWNER')} className="w-full flex items-center gap-4 p-4 border border-slate-200 rounded-xl hover:bg-blue-50 hover:border-blue-300 transition-all group text-left">
@@ -118,7 +115,6 @@ export default function LoginPage() {
                 {loading && <div className="text-center text-xs text-slate-400 mt-2"><Loader2 className="animate-spin inline mr-1" size={12}/> Preparing Demo Environment...</div>}
             </div>
         ) : (
-            /* TAMPILAN 2: MODE COMMERCIAL (Form Email Password) */
             <div className="space-y-4 animate-in fade-in">
                 <div className="relative">
                     <User className="absolute left-3 top-3 text-slate-400" size={20}/>
@@ -130,16 +126,27 @@ export default function LoginPage() {
                         onChange={e=>setEmail(e.target.value)}
                     />
                 </div>
+                
+                {/* --- INPUT PASSWORD DENGAN TOGGLE EYE --- */}
                 <div className="relative">
                     <Lock className="absolute left-3 top-3 text-slate-400" size={20}/>
                     <input 
-                        type="password" 
+                        type={showPassword ? "text" : "password"} // Logic Toggle
                         placeholder="Password" 
-                        className="w-full pl-10 p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm" 
+                        className="w-full pl-10 pr-10 p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm" 
                         value={password} 
                         onChange={e=>setPassword(e.target.value)}
                     />
+                    {/* Tombol Mata */}
+                    <button 
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 focus:outline-none"
+                    >
+                        {showPassword ? <EyeOff size={20}/> : <Eye size={20}/>}
+                    </button>
                 </div>
+
                 <button 
                     onClick={handleCommercialLogin} 
                     disabled={loading} 

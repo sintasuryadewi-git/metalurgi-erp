@@ -5,7 +5,7 @@ import {
   Search, ShoppingCart, Trash2, CreditCard, Banknote, QrCode, 
   Store, LogOut, Printer, X, Loader2,
   User, Clock, Calendar, CheckCircle2,
-  FileDown, ClipboardList, Box, CloudUpload
+  FileDown, ClipboardList, Box, CloudUpload, RefreshCw, Database, Laptop2, Eraser
 } from 'lucide-react';
 
 import { useFetch } from '@/hooks/useFetch'; 
@@ -17,16 +17,22 @@ export default function PosPage() {
   const [cart, setCart] = useState<any[]>([]);
   
   // --- STATE USER & SYNC ---
+  const [ownerEmail, setOwnerEmail] = useState<string>(''); 
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+
+  // --- STATE CLOUD DASHBOARD ---
+  const [viewSource, setViewSource] = useState<'local' | 'cloud'>('local');
+  const [cloudTransactions, setCloudTransactions] = useState<any[]>([]);
+  const [isLoadingCloud, setIsLoadingCloud] = useState(false);
 
   // --- STATE MASTERS ---
   const [masterCashiers, setMasterCashiers] = useState<any[]>([]);
   const [masterShifts, setMasterShifts] = useState<any[]>([]);
   const [receiptConfig, setReceiptConfig] = useState<any>({});
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [coaList, setCoaList] = useState<any[]>([]);
+  const [calculatedStockMap, setCalculatedStockMap] = useState<Record<string, number>>({});
+  const [localSoldQtyMap, setLocalSoldQtyMap] = useState<Record<string, number>>({});
 
   // --- STATE SHIFT & CLOSING ---
   const [isShiftOpen, setIsShiftOpen] = useState(false);
@@ -71,14 +77,10 @@ export default function PosPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
 
-  // --- INVENTORY STOCK STATES ---
-  const [calculatedStockMap, setCalculatedStockMap] = useState<Record<string, number>>({});
-  const [localSoldQtyMap, setLocalSoldQtyMap] = useState<Record<string, number>>({});
-
-  // --- 1. DATA FETCHING ---
+  // --- DATA FETCHING ---
   const { data: apiData, loading } = useFetch<any>('/api/pos');
 
-  // --- 2. DATA PARSER ---
+  // --- DATA PARSER ---
   const processSheetData = (rows: any[]) => {
       if (!rows || rows.length < 2) return [];
       const headers = rows[0].map((h: string) => h.trim()); 
@@ -91,22 +93,30 @@ export default function PosPage() {
       });
   };
 
-  // --- 3. LOAD & PROCESS DATA ---
+  // --- LOAD & PROCESS DATA ---
   useEffect(() => {
-    // A. Load Local Storage Configs
     if (typeof window !== 'undefined') {
         const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
         if (savedLogo) setLogoPreview(savedLogo);
 
-        // Load User Session
-        const storedUser = localStorage.getItem('METALURGI_USER_SESSION');
-        if (storedUser) setCurrentUser(JSON.parse(storedUser));
+        // --- LOAD OWNER EMAIL ---
+        const directEmail = localStorage.getItem('METALURGI_USER_EMAIL');
+        if (directEmail) {
+            setOwnerEmail(directEmail);
+        } else {
+            const userObj = localStorage.getItem('METALURGI_USER');
+            if (userObj) {
+                try {
+                    const parsed = JSON.parse(userObj);
+                    if(parsed.email) setOwnerEmail(parsed.email);
+                    setCurrentUser(parsed);
+                } catch(e) {}
+            }
+        }
 
-        // Load Shift History
         const savedShiftHistory = JSON.parse(localStorage.getItem('METALURGI_POS_SHIFT_HISTORY') || '[]');
         setShiftHistory(savedShiftHistory.reverse()); 
 
-        // Load Active Shift
         const savedShift = localStorage.getItem('METALURGI_POS_SHIFT');
         if (savedShift) {
            const parsed = JSON.parse(savedShift);
@@ -117,11 +127,9 @@ export default function PosPage() {
            }
         }
 
-        // Load Transaction History
         const allTrx = JSON.parse(localStorage.getItem('METALURGI_POS_TRX') || '[]');
         setAllTransactions(allTrx);
 
-        // Load Local Moves (Pending Sync)
         const localMoves = JSON.parse(localStorage.getItem('METALURGI_INVENTORY_MOVEMENTS') || '[]');
         const soldMap: Record<string, number> = {};
         localMoves.forEach((m: any) => {
@@ -133,37 +141,22 @@ export default function PosPage() {
     }
   }, []);
 
-  // B. Process API Data when Arrived (Real from Sheet)
   useEffect(() => {
     if (!apiData) return;
-
     try {
         const rawProducts = processSheetData(apiData.products);
         const rawMovements = processSheetData(apiData.movements);
-        const coa = processSheetData(apiData.coa);
         const users = processSheetData(apiData.users); 
         const shifts = processSheetData(apiData.shifts); 
 
         setProducts(rawProducts);
-        setCoaList(coa);
         
-        // --- SET MASTERS FROM API ---
-        if (users.length > 0) {
-            setMasterCashiers(users);
-        } else {
-            setMasterCashiers([{Name: 'Kasir 1'}, {Name: 'Kasir 2'}, {Name: 'Admin'}]); 
-        }
+        if (users.length > 0) setMasterCashiers(users);
+        else setMasterCashiers([{Name: 'Kasir 1'}, {Name: 'Kasir 2'}, {Name: 'Admin'}]); 
 
-        if (shifts.length > 0) {
-            setMasterShifts(shifts);
-        } else {
-            setMasterShifts([
-                {Shift_Name: 'Pagi', Start_Time: '08:00', End_Time: '16:00'},
-                {Shift_Name: 'Sore', Start_Time: '16:00', End_Time: '22:00'}
-            ]);
-        }
+        if (shifts.length > 0) setMasterShifts(shifts);
+        else setMasterShifts([{Shift_Name: 'Pagi', Start_Time: '08:00', End_Time: '16:00'}, {Shift_Name: 'Sore', Start_Time: '16:00', End_Time: '22:00'}]);
 
-        // --- CALCULATE BASE STOCK FROM SHEET ---
         const stockMap: Record<string, number> = {};
         rawProducts.forEach((p: any) => {
              stockMap[p.SKU] = parseInt(p.Initial_Stock || '0');
@@ -177,18 +170,15 @@ export default function PosPage() {
              }
         });
         setCalculatedStockMap(stockMap); 
-
     } catch (err) {
-        console.error("POS Data Processing Error", err);
+        console.error("POS Data Error", err);
     }
   }, [apiData]);
-
 
   // --- HELPER & LOGIC ---
   const fmtMoney = (n: number) => "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   
   const getProductPromo = (sku: string, basePrice: number) => {
-      // Logic promo bisa dikembangkan di sini
       return { hasPromo: false, finalPrice: basePrice, discountVal: 0, label: '', minQty: 1 };
   };
 
@@ -201,8 +191,38 @@ export default function PosPage() {
       return Math.max(0, sheetStock - soldLocally - inCart);
   };
 
+  // --- FETCH CLOUD DATA ---
+  const fetchCloudData = async () => {
+    if (!ownerEmail) return alert("Sesi Owner tidak terdeteksi. Silakan Login ulang di halaman utama.");
+    
+    setIsLoadingCloud(true);
+    try {
+      const res = await fetch(`/api/pos/report?email=${ownerEmail}`);
+      const json = await res.json();
+      if (json.success) {
+        setCloudTransactions(json.data);
+      } else {
+        console.error(json.error);
+        alert("Gagal mengambil data Cloud: " + json.error);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Koneksi gagal.");
+    } finally {
+      setIsLoadingCloud(false);
+    }
+  };
+
+  useEffect(() => {
+    if (viewSource === 'cloud' && activeView === 'transactions') {
+      fetchCloudData();
+    }
+  }, [viewSource, activeView]);
+
   const filteredHistory = useMemo(() => {
-      let data = [...allTransactions];
+      const sourceData = viewSource === 'local' ? allTransactions : cloudTransactions;
+      let data = [...sourceData];
+      
       const start = new Date(dateRange.start); 
       const end = new Date(dateRange.end); 
       end.setHours(23, 59, 59, 999);
@@ -222,16 +242,59 @@ export default function PosPage() {
       data.sort((a, b) => {
           let aVal = a[sortConfig.key];
           let bVal = b[sortConfig.key];
-          if (sortConfig.key === 'items') { 
-             aVal = a.items.reduce((acc:number, i:any) => acc + i.qty, 0); 
-             bVal = b.items.reduce((acc:number, i:any) => acc + i.qty, 0); 
-          }
           if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
           if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
           return 0;
       });
       return data;
-  }, [allTransactions, dateRange, shiftFilter, historySearch, sortConfig]);
+  }, [allTransactions, cloudTransactions, viewSource, dateRange, shiftFilter, historySearch, sortConfig]);
+
+  // --- AUTO SYNC ---
+  const runAutoSync = async (transaction: any) => {
+    if (!ownerEmail) return; 
+    
+    setIsSyncing(true);
+    try {
+       await fetch('/api/pos/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+              email: ownerEmail, 
+              transactions: [transaction] 
+          })
+       });
+    } catch (err) {
+       console.error("Auto-sync failed (Background):", err);
+    } finally {
+       setIsSyncing(false);
+    }
+  };
+
+  // --- [NEW FEATURE] RESET DATA LOKAL ---
+  const handleResetTransactions = () => {
+      if (viewSource !== 'local') return alert("Hanya bisa menghapus data lokal (tab). Data cloud aman.");
+      if (allTransactions.length === 0) return alert("Data transaksi lokal sudah kosong.");
+
+      const isSure = confirm("⚠️ PERINGATAN PENTING:\n\nAnda akan menghapus SEMUA riwayat transaksi yang tersimpan di Tablet ini.\n\nPastikan Anda SUDAH melakukan SYNC ke Cloud agar data penjualan tidak hilang.\n\nApakah Anda yakin ingin melanjutkan?");
+      
+      if (isSure) {
+          setAllTransactions([]);
+          localStorage.removeItem('METALURGI_POS_TRX');
+          // Reset juga inventory movement lokal jika mau benar-benar bersih
+          // localStorage.removeItem('METALURGI_INVENTORY_MOVEMENTS'); 
+          alert("✅ Riwayat transaksi lokal berhasil dibersihkan.");
+      }
+  };
+
+  const handleResetShifts = () => {
+      if (shiftHistory.length === 0) return alert("Riwayat shift sudah kosong.");
+      
+      if(confirm("⚠️ Hapus semua riwayat Shift di perangkat ini?")) {
+          setShiftHistory([]);
+          localStorage.removeItem('METALURGI_POS_SHIFT_HISTORY');
+          alert("✅ Riwayat shift berhasil dibersihkan.");
+      }
+  };
 
   // --- ACTION HANDLERS ---
   const addToCart = (product: any) => {
@@ -263,22 +326,16 @@ export default function PosPage() {
   const cartTotal = useMemo(() => cart.reduce((acc, item) => acc + (item.price * item.qty), 0), [cart]);
   const changeDue = amountPaid - cartTotal;
 
-  // --- [REVISI PENTING 1] SYNC TO CLOUD FUNCTION ---
+  // --- MANUAL SYNC ---
   const handleSyncToCloud = async () => {
-      // 1. Ambil Data Lokal
       const localData = localStorage.getItem('METALURGI_POS_TRX');
       if (!localData) return alert("Belum ada data transaksi.");
-
       const transactions = JSON.parse(localData);
       if (transactions.length === 0) return alert("Data transaksi kosong.");
 
-      // 2. VALIDASI SESI USER (Penting: Jangan pakai fallback email lagi)
-      if (!currentUser || !currentUser.email) {
-          return alert("⚠️ GAGAL: Sesi user tidak valid. Silakan Logout dan Login kembali agar sistem mengenali kasir.");
-      }
+      if (!ownerEmail) return alert("Sesi Owner tidak valid. Silakan Logout dan Login kembali.");
 
-      // 3. Konfirmasi
-      if(!confirm(`Upload ${transactions.length} transaksi ke Cloud atas nama ${currentUser.email}?`)) return;
+      if(!confirm(`Upload ${transactions.length} transaksi ke Cloud?`)) return;
 
       setIsSyncing(true);
       try {
@@ -286,37 +343,18 @@ export default function PosPage() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
-                  // Pastikan email ini valid dari session
-                  email: currentUser.email, 
+                  email: ownerEmail, 
                   transactions: transactions 
               })
           });
-
           const json = await res.json();
-          if (json.success) {
-              alert(`✅ SUKSES: ${json.message}`);
-          } else {
-              // Menampilkan detail error dari server (User not found dsb)
-              alert(`❌ GAGAL: ${json.error}`);
-          }
+          if (json.success) alert(`✅ SUKSES: ${json.message}`);
+          else alert(`❌ GAGAL: ${json.error}`);
       } catch (err) {
-          alert("Gagal koneksi ke server. Cek koneksi internet.");
-          console.error(err);
+          alert("Gagal koneksi ke server.");
       } finally {
           setIsSyncing(false);
       }
-  };
-
-  const handleExport = () => {
-      if(filteredHistory.length === 0) return alert("Tidak ada data untuk diexport");
-      const header = ["No Transaksi", "Tanggal", "Waktu", "Kasir", "Shift", "Metode", "Total Qty", "Total Rp", "Status Print"];
-      const rows = filteredHistory.map(t => [t.id, t.date, t.timestamp, t.cashier, t.shift, t.paymentMethod, t.items.reduce((a:any,b:any)=>a+b.qty,0), t.total, t.isPrinted ? "Printed" : "Unprinted"]);
-      const csvContent = "data:text/csv;charset=utf-8," + header.join(",") + "\n" + rows.map(e => e.join(",")).join("\n");
-      const link = document.createElement("a");
-      link.setAttribute("href", encodeURI(csvContent));
-      link.setAttribute("download", `POS_Report_${dateRange.start}_to_${dateRange.end}.csv`);
-      document.body.appendChild(link);
-      link.click();
   };
 
   const handleOpenShift = () => {
@@ -355,13 +393,11 @@ export default function PosPage() {
      setShiftReportData(closingData); setPrintType('shift_report'); setShowReceiptPreview(true);
   };
 
-  // --- [REVISI PENTING 2] PROSES PEMBAYARAN (Format Tanggal) ---
   const handleProcessPayment = () => {
      if (amountPaid < cartTotal && paymentMethod === 'Cash') return alert("Uang pembayaran kurang!");
      
      const trx = {
         id: `POS-${Math.floor(Math.random()*1000000)}`,
-        // Ubah ke format ISO penuh agar API tidak bingung saat split
         date: new Date().toISOString(), 
         timestamp: new Date().toLocaleTimeString(), 
         items: cart, 
@@ -385,6 +421,9 @@ export default function PosPage() {
 
      generatePOSJournals(trx);
      updateInventoryStock(trx);
+     
+     runAutoSync(trx);
+
      setCurrentTrx(trx); setShowPaymentModal(false); setCart([]); setShowSuccessModal(true);
   };
 
@@ -392,7 +431,7 @@ export default function PosPage() {
     try {
         const journals: any[] = [];
         const debitAcc = trx.paymentMethod === 'Cash' ? '1-1001' : '1-1002'; 
-        const dateStr = trx.date.split('T')[0]; // Safe split untuk lokal
+        const dateStr = trx.date.split('T')[0];
         
         journals.push({ 
             source: 'POS', id: `JNL-${trx.id}-SALES`, date: dateStr, ref: trx.id, 
@@ -414,10 +453,7 @@ export default function PosPage() {
         let existingGL = existingRaw ? JSON.parse(existingRaw) : [];
         if (!Array.isArray(existingGL)) existingGL = [];
         localStorage.setItem('METALURGI_GL_JOURNALS', JSON.stringify([...existingGL, ...journals]));
-
-    } catch (err) {
-        console.error("Gagal generate jurnal POS:", err);
-    }
+    } catch (err) { console.error("Gagal generate jurnal POS:", err); }
  };
 
   const updateInventoryStock = (trx: any) => {
@@ -519,40 +555,84 @@ export default function PosPage() {
           {!isJasa && (<div className={`absolute top-2 left-2 px-2 py-0.5 rounded text-[10px] font-bold z-10 flex items-center gap-1 ${liveStock > 10 ? 'bg-emerald-100 text-emerald-700' : liveStock > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'}`}><Box size={10}/> {liveStock > 0 ? `${liveStock} Stok` : 'Habis'}</div>)}
           <div><div className="text-[10px] text-slate-400 mb-1 mt-6">{prod.Category}</div><div className="font-bold text-slate-800 text-sm leading-tight mb-2 line-clamp-2">{prod.Product_Name}</div></div><div className="mt-auto">{promo.hasPromo ? (<div className="flex flex-col"><span className="text-[10px] text-slate-400 line-through">{fmtMoney(parseInt(prod.Sell_Price_List))}</span><span className="text-rose-600 font-bold">{fmtMoney(promo.finalPrice)}</span></div>) : (<div className="text-blue-600 font-bold">{fmtMoney(parseInt(prod.Sell_Price_List))}</div>)}</div></div>); })}</div>}</div></div><div className="w-[350px] bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden"><div className="p-4 border-b border-slate-100 bg-slate-50"><h2 className="font-bold text-slate-800 flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h2></div><div className="flex-1 overflow-y-auto p-4 space-y-3">{cart.length === 0 ? (<div className="text-center text-slate-400 mt-10 flex flex-col items-center"><ShoppingCart size={40} className="mb-2 opacity-20"/><p className="text-sm">Keranjang Kosong</p></div>) : cart.map((item, i) => (<div key={i} className="flex justify-between items-start border-b border-slate-100 pb-2"><div className="flex-1"><div className="text-sm font-bold text-slate-800">{item.name}</div><div className="text-xs text-blue-600">{fmtMoney(item.price)}</div></div><div className="flex items-center gap-3"><div className="flex items-center gap-2 bg-slate-100 rounded-lg px-1"><button onClick={() => updateQty(item.sku, -1)} className="p-1 text-slate-500 hover:text-rose-600 font-bold">-</button><span className="text-xs font-bold w-4 text-center">{item.qty}</span><button onClick={() => updateQty(item.sku, 1)} className="p-1 text-slate-500 hover:text-emerald-600 font-bold">+</button></div><button onClick={() => removeFromCart(item.sku)} className="text-slate-300 hover:text-rose-500"><Trash2 size={16}/></button></div></div>))}</div><div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3"><div className="flex justify-between text-lg font-bold text-slate-900"><span>Total</span><span>{fmtMoney(cartTotal)}</span></div><button onClick={() => cartTotal > 0 && setShowPaymentModal(true)} disabled={cartTotal === 0} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all">Bayar Sekarang</button></div></div></div>)}
       
-      {/* VIEW 2: TRANSACTIONS */}
+      {/* VIEW 2: TRANSACTIONS (WITH CLOUD TOGGLE) */}
       {activeView === 'transactions' && (
         <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col print:hidden">
             <div className="p-4 border-b border-slate-100 bg-white space-y-4">
-                <div className="flex flex-wrap items-center gap-3">
-                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
-                        <Calendar size={14} className="text-slate-400"/>
-                        <span className="text-xs font-bold text-slate-500">From</span>
-                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
-                        <span className="text-xs font-bold text-slate-500">To</span>
-                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                <div className="flex flex-wrap items-center gap-3 justify-between">
+                    <div className="flex gap-3">
+                        <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
+                            <Calendar size={14} className="text-slate-400"/>
+                            <span className="text-xs font-bold text-slate-500">From</span>
+                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
+                            <span className="text-xs font-bold text-slate-500">To</span>
+                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                        </div>
+                        <select className="text-xs p-2 rounded-lg border border-slate-200" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}>
+                            <option value="all">Semua Shift</option>{masterShifts.map((s,i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name}</option>)}
+                        </select>
                     </div>
-                    <select className="text-xs p-2 rounded-lg border border-slate-200" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}>
-                        <option value="all">Semua Shift</option>{masterShifts.map((s,i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name}</option>)}
-                    </select>
-                    
-                    {/* BUTTON SYNC TO CLOUD */}
+
+                    {/* CLOUD DASHBOARD TOGGLE */}
+                    <div className="flex items-center bg-slate-100 p-1 rounded-lg">
+                      <button 
+                        onClick={() => setViewSource('local')}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'local' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}
+                      >
+                        <Database size={14}/> Data Lokal (Tab)
+                      </button>
+                      <button 
+                        onClick={() => setViewSource('cloud')}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'cloud' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500'}`}
+                      >
+                        <Laptop2 size={14}/> Data Cloud (Report)
+                      </button>
+                    </div>
+                </div>
+                
+                <div className="flex justify-between items-center gap-3">
+                  <div className="flex-1 relative">
+                        <Search className="absolute left-3 top-2.5 text-slate-400" size={14}/>
+                        <input type="text" placeholder="Cari Transaksi..." className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200" value={historySearch} onChange={e => setHistorySearch(e.target.value)}/>
+                  </div>
+                  
+                  {/* [REVISI] TOMBOL HAPUS DATA LOKAL */}
+                  {viewSource === 'local' && (
+                    <button 
+                        onClick={handleResetTransactions}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all bg-rose-100 text-rose-600 hover:bg-rose-200"
+                        title="Hapus riwayat transaksi lokal"
+                    >
+                        <Trash2 size={16}/> Reset Data
+                    </button>
+                  )}
+
+                  {/* TOMBOL MANUAL SYNC (Hanya muncul jika view local) */}
+                  {viewSource === 'local' && (
                     <button 
                         onClick={handleSyncToCloud}
                         disabled={isSyncing}
                         className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-sm ${isSyncing ? 'bg-slate-100 text-slate-400' : 'bg-emerald-500 hover:bg-emerald-600 text-white'}`}
                     >
                         {isSyncing ? <Loader2 size={14} className="animate-spin"/> : <CloudUpload size={14}/>}
-                        {isSyncing ? 'Uploading...' : 'Sync to Cloud'}
+                        {isSyncing ? 'Uploading...' : 'Manual Sync'}
                     </button>
-
-                    <div className="flex-1 relative">
-                        <Search className="absolute left-3 top-2.5 text-slate-400" size={14}/>
-                        <input type="text" placeholder="Cari..." className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200" value={historySearch} onChange={e => setHistorySearch(e.target.value)}/>
-                    </div>
+                  )}
+                  {viewSource === 'cloud' && (
+                     <button onClick={fetchCloudData} disabled={isLoadingCloud} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600">
+                       <RefreshCw size={16} className={isLoadingCloud ? "animate-spin" : ""}/>
+                     </button>
+                  )}
                 </div>
             </div>
             
             <div className="flex-1 overflow-auto p-0">
+                {isLoadingCloud ? (
+                   <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2">
+                      <Loader2 size={32} className="animate-spin"/>
+                      <p className="text-sm">Mengambil data dari Cloud...</p>
+                   </div>
+                ) : (
                 <table className="w-full text-sm text-left">
                     <thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10">
                         <tr><th className="p-4">No. Transaksi</th><th className="p-4">Waktu</th><th className="p-4">Produk</th><th className="p-4 text-center">Qty</th><th className="p-4 text-right">Total (Rp)</th><th className="p-4 text-center">Action</th></tr>
@@ -560,7 +640,10 @@ export default function PosPage() {
                     <tbody className="divide-y divide-slate-100">
                         {filteredHistory.map((trx, idx) => (
                             <tr key={idx} className="hover:bg-blue-50/50">
-                                <td className="p-4 font-mono font-bold text-xs text-slate-600 align-top">{trx.id}</td>
+                                <td className="p-4 font-mono font-bold text-xs text-slate-600 align-top">
+                                  {trx.id}
+                                  {trx.isCloud && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[9px]">CLOUD</span>}
+                                </td>
                                 <td className="p-4 text-slate-500 text-xs align-top"><div>{trx.date.split('T')[0]}</div><div>{trx.timestamp}</div></td>
                                 <td className="p-4 align-top"><div className="flex flex-col gap-1">{trx.items.map((it:any, i:number) => (<span key={i} className="text-xs text-slate-700">• {it.name} <span className="text-slate-400">x{it.qty}</span></span>))}</div></td>
                                 <td className="p-4 text-center font-bold align-top">{trx.items.reduce((a:any,b:any)=>a+b.qty,0)}</td>
@@ -570,12 +653,21 @@ export default function PosPage() {
                         ))}
                     </tbody>
                 </table>
+                )}
             </div>
         </div>
       )}
 
       {/* VIEW 3: SHIFTS (SAME) */}
-      {activeView === 'shifts' && (<div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col print:hidden"><div className="p-4 border-b border-slate-100 bg-slate-50"><h3 className="font-bold text-slate-800 flex items-center gap-2"><ClipboardList size={18}/> Riwayat Shift Kasir</h3></div><div className="flex-1 overflow-auto p-0"><table className="w-full text-sm text-left"><thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10"><tr><th className="p-4">Tanggal</th><th className="p-4">Shift</th><th className="p-4 text-right">Total Penjualan</th><th className="p-4 text-right">Fisik Akhir</th><th className="p-4 text-right">Selisih</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{shiftHistory.map((s, i) => (<tr key={i} className="hover:bg-blue-50"><td className="p-4 font-mono text-xs">{new Date(s.startTime).toLocaleDateString()}</td><td className="p-4 font-bold text-slate-700">{s.shiftName} / {s.cashierName}</td><td className="p-4 text-right font-bold text-emerald-600">{fmtMoney(s.totalSales)}</td><td className="p-4 text-right font-bold">{fmtMoney(s.endCashActual)}</td><td className={`p-4 text-right font-bold ${s.variance < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{fmtMoney(s.variance)}</td><td className="p-4 text-center"><button onClick={() => { setShiftReportData(s); setPrintType('shift_report'); setShowReceiptPreview(true); }} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-blue-600"><Printer size={16}/></button></td></tr>))}</tbody></table></div></div>)}
+      {activeView === 'shifts' && (<div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col print:hidden">
+        <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+            <h3 className="font-bold text-slate-800 flex items-center gap-2"><ClipboardList size={18}/> Riwayat Shift Kasir</h3>
+            {/* [REVISI] TOMBOL HAPUS SHIFT */}
+            <button onClick={handleResetShifts} className="px-3 py-1.5 bg-white border border-slate-300 text-slate-600 rounded-lg text-xs font-bold hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 flex items-center gap-2 transition-all">
+                <Eraser size={14}/> Reset History
+            </button>
+        </div>
+        <div className="flex-1 overflow-auto p-0"><table className="w-full text-sm text-left"><thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10"><tr><th className="p-4">Tanggal</th><th className="p-4">Shift</th><th className="p-4 text-right">Total Penjualan</th><th className="p-4 text-right">Fisik Akhir</th><th className="p-4 text-right">Selisih</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{shiftHistory.map((s, i) => (<tr key={i} className="hover:bg-blue-50"><td className="p-4 font-mono text-xs">{new Date(s.startTime).toLocaleDateString()}</td><td className="p-4 font-bold text-slate-700">{s.shiftName} / {s.cashierName}</td><td className="p-4 text-right font-bold text-emerald-600">{fmtMoney(s.totalSales)}</td><td className="p-4 text-right font-bold">{fmtMoney(s.endCashActual)}</td><td className={`p-4 text-right font-bold ${s.variance < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{fmtMoney(s.variance)}</td><td className="p-4 text-center"><button onClick={() => { setShiftReportData(s); setPrintType('shift_report'); setShowReceiptPreview(true); }} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-blue-600"><Printer size={16}/></button></td></tr>))}</tbody></table></div></div>)}
 
       {/* MODALS & POPUPS (SAME AS BEFORE) */}
       {showShiftModal && (<div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6 text-center animate-in zoom-in-95"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4"><Store size={32}/></div><h3 className="font-bold text-xl text-slate-900 mb-2">Buka Shift Kasir</h3><div className="space-y-3 text-left"><div><label className="text-xs font-bold text-slate-500">Pilih Kasir</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedCashier(e.target.value)}><option value="">-- Pilih --</option>{masterCashiers.map((c, i) => <option key={i} value={c.Name}>{c.Name}</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Pilih Shift</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedShift(e.target.value)}><option value="">-- Pilih --</option>{masterShifts.map((s, i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name} ({s.Start_Time || '00:00'}-{s.End_Time || '23:59'})</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Saldo Awal (Modal)</label><input type="number" className="w-full p-2 border rounded-lg mt-1" placeholder="Rp" onChange={e => setStartCashInput(parseInt(e.target.value)||0)}/></div><button onClick={handleOpenShift} className="w-full py-3 mt-2 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">Buka Toko</button></div></div></div>)}
