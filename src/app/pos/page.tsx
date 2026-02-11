@@ -5,7 +5,7 @@ import {
   Search, ShoppingCart, Trash2, CreditCard, Banknote, QrCode, 
   Store, LogOut, Printer, X, Loader2,
   User, Clock, Calendar, CheckCircle2,
-  FileDown, ClipboardList, Box, CloudUpload, RefreshCw, Database, Laptop2, Eraser, UploadCloud
+  FileDown, ClipboardList, Box, CloudUpload, RefreshCw, Database, Laptop2, Eraser, UploadCloud, ImageIcon
 } from 'lucide-react';
 
 import { useFetch } from '@/hooks/useFetch'; 
@@ -29,7 +29,15 @@ export default function PosPage() {
   // --- STATE MASTERS ---
   const [masterCashiers, setMasterCashiers] = useState<any[]>([]);
   const [masterShifts, setMasterShifts] = useState<any[]>([]);
-  const [receiptConfig, setReceiptConfig] = useState<any>({});
+  
+  // STATE CONFIG STRUK (Dari API)
+  const [receiptConfig, setReceiptConfig] = useState<any>({
+      Store_Name: 'METALURGI POS',
+      Address: '',
+      Phone: '',
+      Footer: 'Terima Kasih'
+  });
+  
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [calculatedStockMap, setCalculatedStockMap] = useState<Record<string, number>>({});
   const [localSoldQtyMap, setLocalSoldQtyMap] = useState<Record<string, number>>({});
@@ -99,6 +107,17 @@ export default function PosPage() {
         const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
         if (savedLogo) setLogoPreview(savedLogo);
 
+        // --- LOAD RECEIPT CONFIG DARI LOCAL STORAGE (BACKUP) ---
+        const savedMasters = localStorage.getItem('METALURGI_POS_MASTERS');
+        if (savedMasters) {
+            try {
+                const parsedMasters = JSON.parse(savedMasters);
+                if (parsedMasters.receipt) {
+                    setReceiptConfig(parsedMasters.receipt);
+                }
+            } catch (e) { console.error("Gagal load config struk", e); }
+        }
+
         // --- LOAD OWNER EMAIL ---
         const directEmail = localStorage.getItem('METALURGI_USER_EMAIL');
         if (directEmail) {
@@ -149,6 +168,11 @@ export default function PosPage() {
         const users = processSheetData(apiData.users); 
         const shifts = processSheetData(apiData.shifts); 
 
+        // Load Config Struk dari API
+        if (apiData.receipt) {
+            setReceiptConfig(apiData.receipt);
+        }
+
         setProducts(rawProducts);
         
         if (users.length > 0) setMasterCashiers(users);
@@ -191,7 +215,6 @@ export default function PosPage() {
       return Math.max(0, sheetStock - soldLocally - inCart);
   };
 
-  // --- FETCH CLOUD DATA ---
   const fetchCloudData = async () => {
     if (!ownerEmail) return alert("Sesi Owner tidak terdeteksi. Silakan Login ulang di halaman utama.");
     
@@ -202,9 +225,11 @@ export default function PosPage() {
       if (json.success) {
         setCloudTransactions(json.data);
       } else {
+        console.error(json.error);
         alert("Gagal mengambil data Cloud: " + json.error);
       }
     } catch (err) {
+      console.error(err);
       alert("Koneksi gagal.");
     } finally {
       setIsLoadingCloud(false);
@@ -246,7 +271,7 @@ export default function PosPage() {
       return data;
   }, [allTransactions, cloudTransactions, viewSource, dateRange, shiftFilter, historySearch, sortConfig]);
 
-  // --- SYNC LOGIC (TRANSACTIONS) ---
+  // --- SYNC LOGIC ---
   const runAutoSync = async (transaction: any) => {
     if (!ownerEmail) return; 
     setIsSyncing(true);
@@ -259,7 +284,6 @@ export default function PosPage() {
     finally { setIsSyncing(false); }
   };
 
-  // --- [NEW FEATURE 2] SYNC LOGIC (SHIFTS) ---
   const handleSyncShifts = async () => {
       if (!ownerEmail) return alert("Sesi Owner tidak valid.");
       if (shiftHistory.length === 0) return alert("Tidak ada data shift.");
@@ -281,18 +305,13 @@ export default function PosPage() {
       finally { setIsSyncing(false); }
   };
 
-  // --- [NEW FEATURE 1] DELETE SINGLE TRANSACTION ---
   const handleDeleteTransaction = (id: string) => {
       if(viewSource !== 'local') return alert("Data Cloud tidak bisa dihapus dari sini.");
       
       if(confirm("Apakah Anda yakin ingin menghapus transaksi ini? Stok tidak akan dikembalikan otomatis.")) {
-          // 1. Filter Out
           const newTrx = allTransactions.filter(t => t.id !== id);
-          
-          // 2. Save State & LocalStorage
           setAllTransactions(newTrx);
           localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(newTrx));
-          
           alert("Transaksi dihapus.");
       }
   };
@@ -382,7 +401,6 @@ export default function PosPage() {
      setShiftHistory(newHistory); 
      localStorage.removeItem('METALURGI_POS_SHIFT');
      
-     // [AUTO SYNC SHIFT]
      if (ownerEmail) {
          fetch('/api/pos/shift', {
              method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -418,7 +436,6 @@ export default function PosPage() {
      setCurrentTrx(trx); setShowPaymentModal(false); setCart([]); setShowSuccessModal(true);
   };
 
-  // ... (generatePOSJournals, updateInventoryStock, handlePrintReceipt SAME AS BEFORE)
   const generatePOSJournals = (trx: any) => { try { const journals: any[] = []; const debitAcc = trx.paymentMethod === 'Cash' ? '1-1001' : '1-1002'; const dateStr = trx.date.split('T')[0]; journals.push({ source: 'POS', id: `JNL-${trx.id}-SALES`, date: dateStr, ref: trx.id, desc: `Penjualan POS - ${trx.items.length} Items`, debit_acc: debitAcc, credit_acc: '4-1001', amount: trx.total }); trx.items.forEach((item: any) => { const prod = products.find(p => p.SKU === item.sku); const cost = parseInt(prod?.Std_Cost_Budget || '0'); if (cost > 0) { journals.push({ source: 'POS', id: `JNL-${trx.id}-COGS-${item.sku}`, date: dateStr, ref: trx.id, desc: `HPP - ${item.name}`, debit_acc: '5-1000', credit_acc: '1-1300', amount: cost * item.qty }); } }); const existingRaw = localStorage.getItem('METALURGI_GL_JOURNALS'); let existingGL = existingRaw ? JSON.parse(existingRaw) : []; if (!Array.isArray(existingGL)) existingGL = []; localStorage.setItem('METALURGI_GL_JOURNALS', JSON.stringify([...existingGL, ...journals])); } catch (err) { console.error("Gagal generate jurnal POS:", err); } };
   const updateInventoryStock = (trx: any) => { const dateStr = trx.date.split('T')[0]; const moves = trx.items.map((item: any) => ({ id: `MOV-POS-${trx.id}-${item.sku}`, date: dateStr, type: 'OUT', sku: item.sku, qty: item.qty, cost: 0, ref: trx.id })); const existingMoves = JSON.parse(localStorage.getItem('METALURGI_INVENTORY_MOVEMENTS') || '[]'); const newMoves = [...existingMoves, ...moves]; localStorage.setItem('METALURGI_INVENTORY_MOVEMENTS', JSON.stringify(newMoves)); const newSoldMap = { ...localSoldQtyMap }; moves.forEach((m: any) => { newSoldMap[m.sku] = (newSoldMap[m.sku] || 0) + m.qty; }); setLocalSoldQtyMap(newSoldMap); };
   const handlePrintReceipt = () => { if(!currentTrx) return; const allTrx = JSON.parse(localStorage.getItem('METALURGI_POS_TRX') || '[]'); const updatedTrx = allTrx.map((t:any) => t.id === currentTrx.id ? { ...t, isPrinted: true } : t); localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(updatedTrx)); setAllTransactions(updatedTrx); setShowSuccessModal(false); setPrintType('receipt'); setShowReceiptPreview(true); };
@@ -427,6 +444,7 @@ export default function PosPage() {
   const filteredProducts = products.filter(p => (activeCategory === 'All' || p.Category === activeCategory) && (p.Product_Name.toLowerCase().includes(searchTerm.toLowerCase()) || p.SKU.toLowerCase().includes(searchTerm.toLowerCase())));
 
   // --- TEMPLATES ---
+  // [FIX] Definisikan Template dengan benar sebelum return
   const ShiftReportTemplate = ({ data }: { data: any }) => (
       <>
          <div className="text-center mb-3">
@@ -462,8 +480,21 @@ export default function PosPage() {
   const ReceiptTemplate = ({ trx }: { trx: any }) => (
       <>
          <div className="text-center mb-4">
-             {logoPreview && <img src={logoPreview} alt="Logo" className="h-10 mx-auto mb-2 object-contain"/>}
-             <h2 className="font-bold text-sm uppercase">{receiptConfig.Store_Name || 'Metalurgi POS'}</h2>
+             {logoPreview ? (
+                 <img src={logoPreview} alt="Logo" className="h-10 mx-auto mb-2 object-contain"/>
+             ) : (
+                 <div className="mb-2 text-2xl">🏪</div>
+             )}
+             
+             {/* Header Nama Toko */}
+             <h2 className="font-bold text-sm uppercase text-black">
+                 {receiptConfig.Store_Name || 'METALURGI POS'}
+             </h2>
+             
+             {/* Alamat & Telp */}
+             {receiptConfig.Address && <div className="text-[10px] text-slate-600">{receiptConfig.Address}</div>}
+             {receiptConfig.Phone && <div className="text-[10px] text-slate-600">{receiptConfig.Phone}</div>}
+
              <div className="mt-2 text-left border-t border-black border-dashed pt-2">
                  <div className="flex justify-between"><span>Trx:</span> <span>{trx.id}</span></div>
                  <div className="flex justify-between"><span>Date:</span> <span>{trx.date.split('T')[0]} {trx.timestamp}</span></div>
@@ -480,7 +511,10 @@ export default function PosPage() {
              <div className="flex justify-between mt-2"><span>Bayar</span><span>{fmtMoney(trx.amountPaid)}</span></div>
              <div className="flex justify-between"><span>Kembali</span><span>{fmtMoney(trx.change)}</span></div>
          </div>
-         <div className="text-center mt-4"><p>{receiptConfig.Footer || 'Terima Kasih'}</p></div>
+         <div className="text-center mt-4 text-[10px]">
+             <p>{receiptConfig.Footer || 'Terima Kasih'}</p>
+             {receiptConfig.Instagram && <p className="mt-1 font-bold">{receiptConfig.Instagram}</p>}
+         </div>
       </>
   );
 
@@ -501,7 +535,7 @@ export default function PosPage() {
           {!isJasa && (<div className={`absolute top-2 left-2 px-2 py-0.5 rounded text-[10px] font-bold z-10 flex items-center gap-1 ${liveStock > 10 ? 'bg-emerald-100 text-emerald-700' : liveStock > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'}`}><Box size={10}/> {liveStock > 0 ? `${liveStock} Stok` : 'Habis'}</div>)}
           <div><div className="text-[10px] text-slate-400 mb-1 mt-6">{prod.Category}</div><div className="font-bold text-slate-800 text-sm leading-tight mb-2 line-clamp-2">{prod.Product_Name}</div></div><div className="mt-auto">{promo.hasPromo ? (<div className="flex flex-col"><span className="text-[10px] text-slate-400 line-through">{fmtMoney(parseInt(prod.Sell_Price_List))}</span><span className="text-rose-600 font-bold">{fmtMoney(promo.finalPrice)}</span></div>) : (<div className="text-blue-600 font-bold">{fmtMoney(parseInt(prod.Sell_Price_List))}</div>)}</div></div>); })}</div>}</div></div><div className="w-[350px] bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden"><div className="p-4 border-b border-slate-100 bg-slate-50"><h2 className="font-bold text-slate-800 flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h2></div><div className="flex-1 overflow-y-auto p-4 space-y-3">{cart.length === 0 ? (<div className="text-center text-slate-400 mt-10 flex flex-col items-center"><ShoppingCart size={40} className="mb-2 opacity-20"/><p className="text-sm">Keranjang Kosong</p></div>) : cart.map((item, i) => (<div key={i} className="flex justify-between items-start border-b border-slate-100 pb-2"><div className="flex-1"><div className="text-sm font-bold text-slate-800">{item.name}</div><div className="text-xs text-blue-600">{fmtMoney(item.price)}</div></div><div className="flex items-center gap-3"><div className="flex items-center gap-2 bg-slate-100 rounded-lg px-1"><button onClick={() => updateQty(item.sku, -1)} className="p-1 text-slate-500 hover:text-rose-600 font-bold">-</button><span className="text-xs font-bold w-4 text-center">{item.qty}</span><button onClick={() => updateQty(item.sku, 1)} className="p-1 text-slate-500 hover:text-emerald-600 font-bold">+</button></div><button onClick={() => removeFromCart(item.sku)} className="text-slate-300 hover:text-rose-500"><Trash2 size={16}/></button></div></div>))}</div><div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3"><div className="flex justify-between text-lg font-bold text-slate-900"><span>Total</span><span>{fmtMoney(cartTotal)}</span></div><button onClick={() => cartTotal > 0 && setShowPaymentModal(true)} disabled={cartTotal === 0} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all">Bayar Sekarang</button></div></div></div>)}
       
-      {/* VIEW 2: TRANSACTIONS */}
+      {/* VIEW 2: TRANSACTIONS (WITH CLOUD TOGGLE) */}
       {activeView === 'transactions' && (
         <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col print:hidden">
             <div className="p-4 border-b border-slate-100 bg-white space-y-4">
@@ -604,8 +638,32 @@ export default function PosPage() {
       {/* PREVIEW MODAL */}
       {showReceiptPreview && (<div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"><div className="p-4 border-b flex justify-between items-center bg-slate-50"><h3 className="font-bold text-slate-800">Preview Cetakan</h3><button onClick={() => setShowReceiptPreview(false)}><X className="text-slate-400"/></button></div><div className="p-8 bg-slate-200 overflow-y-auto flex justify-center"><div className="bg-white p-4 w-[300px] shadow-sm text-[10px] font-mono leading-tight">{printType === 'receipt' && currentTrx && <ReceiptTemplate trx={currentTrx}/>}{printType === 'shift_report' && shiftReportData && <ShiftReportTemplate data={shiftReportData}/>}</div></div><div className="p-4 border-t bg-white flex justify-end gap-2"><button onClick={() => setShowReceiptPreview(false)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-50 rounded-lg">Batal</button><button onClick={() => window.print()} className="px-6 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 flex items-center gap-2"><Printer size={16}/><FileDown size={16}/> Cetak / Simpan PDF</button></div></div></div>)}
       
-      {/* HIDDEN PRINT AREA */}
-      <div className="hidden print:block fixed top-0 left-0 w-[58mm] bg-white text-black p-2 text-[10px] font-mono leading-tight">{printType === 'receipt' && currentTrx && <ReceiptTemplate trx={currentTrx}/>}{printType === 'shift_report' && shiftReportData && <ShiftReportTemplate data={shiftReportData}/>}</div>
+      {/* --- REVISI: PRINT AREA OPTIMIZED (58mm & 80mm Safe) --- */}
+      <div className="hidden print:block print:w-full">
+        <style jsx global>{`
+          @media print {
+            @page {
+              margin: 0; /* Hapus margin default browser */
+              size: auto; 
+            }
+            body {
+              margin: 0;
+              padding: 0;
+            }
+            /* Sembunyikan elemen lain saat nge-print */
+            body > *:not(.print\\:block) {
+              display: none;
+            }
+          }
+        `}</style>
+
+        {/* Container Struk: Sesuaikan width di sini (58mm atau 80mm) */}
+        {/* saran: gunakan max-w-[58mm] atau max-w-[80mm] agar fleksibel */}
+        <div className="w-[58mm] bg-white text-black p-1 text-[10px] font-mono leading-tight mx-auto">
+            {printType === 'receipt' && currentTrx && <ReceiptTemplate trx={currentTrx}/>}
+            {printType === 'shift_report' && shiftReportData && <ShiftReportTemplate data={shiftReportData}/>}
+        </div>
+      </div>
     </div>
   );
 }

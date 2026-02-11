@@ -6,11 +6,14 @@ import {
   Users, Package, Coins,
   X, Loader2, ExternalLink, FileJson,
   Store, Receipt, UserCheck, Clock, Percent, Upload, Image as ImageIcon,
-  Wallet, ShieldAlert, Trash2, LogOut, Database, User, Key, RefreshCcw, HardDrive
+  Wallet, ShieldAlert, Trash2, LogOut, Database, User, Key, RefreshCcw, HardDrive,
+  Edit, Lock, Mail // [ADDED] Icon untuk fitur edit
 } from 'lucide-react';
+import { useRouter } from 'next/navigation'; // [ADDED] Untuk redirect logout
 
 export default function SettingsPage() {
-  
+  const router = useRouter();
+
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'admin' | 'pos_config' | 'mapping' | 'payroll' | 'finance' | 'inventory' | 'entities'>('admin');
   const [loading, setLoading] = useState(false);
@@ -18,7 +21,17 @@ export default function SettingsPage() {
   // User State
   const [currentUser, setCurrentUser] = useState({ email: '', name: '', role: '', sheetId: '' });
 
-  // Data Pools (DIVISION REMOVED)
+  // [NEW STATE] EDIT PROFILE
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+      newName: '',
+      newEmail: '',
+      newPassword: '', 
+      currentPassword: '' 
+  });
+
+  // Data Pools
   const [coaList, setCoaList] = useState<any[]>([]);
   const [productList, setProductList] = useState<any[]>([]);
   const [partnerList, setPartnerList] = useState<any[]>([]);
@@ -40,24 +53,42 @@ export default function SettingsPage() {
   const [resetMonth, setResetMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [localDataSize, setLocalDataSize] = useState(0);
 
-  // Modal
+  // Modal Info (General)
   const [isModalOpen, setIsModalOpen] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [modalType, setModalType] = useState<string | null>(null);
 
   // --- INITIALIZE ---
   useEffect(() => {
-      // 1. SIMULASI LOGIN (AUTO-FIX GUEST ISSUE)
-      // Jika belum ada session, kita set session Ibu Rina agar sync jalan
-      let session = localStorage.getItem('METALURGI_USER_SESSION');
-      if (!session) {
-          const defaultUser = { email: 'rina@cahaya.com', name: 'Ibu Rina', role: 'OWNER', sheetId: '' };
-          localStorage.setItem('METALURGI_USER_SESSION', JSON.stringify(defaultUser));
-          setCurrentUser(defaultUser);
+      // 1. [REVISI] LOAD REAL USER DATA
+      // Cek apakah ada data user lengkap dari Login Page?
+      const realUserJson = localStorage.getItem('METALURGI_USER');
+      
+      if (realUserJson) {
+          try {
+              const realUser = JSON.parse(realUserJson);
+              setCurrentUser(realUser);
+              
+              // Pre-fill form edit
+              setEditForm(prev => ({ 
+                  ...prev, 
+                  newName: realUser.name || '', 
+                  newEmail: realUser.email || '' 
+              }));
+          } catch (e) { console.error("Error parsing user data"); }
       } else {
-          setCurrentUser(JSON.parse(session));
+          // Fallback ke logic lama (Guest/Session Only) jika METALURGI_USER belum ada
+          let session = localStorage.getItem('METALURGI_USER_SESSION');
+          if (!session) {
+              const defaultUser = { email: 'rina@cahaya.com', name: 'Ibu Rina (Default)', role: 'OWNER', sheetId: '' };
+              // Jangan setItem session dulu agar tidak menimpa jika user sebenarnya belum login
+              setCurrentUser(defaultUser);
+          } else {
+              setCurrentUser(JSON.parse(session));
+          }
       }
       
-      // 2. Load Local Configs
+      // 2. Load Local Configs (SAMA SEPERTI SEBELUMNYA)
       const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
       if (savedLogo) setLogoPreview(savedLogo);
       const savedPayroll = localStorage.getItem('METALURGI_PAYROLL_CONFIG');
@@ -73,7 +104,7 @@ export default function SettingsPage() {
 
   // Trigger Sync Otomatis saat email user terdeteksi
   useEffect(() => {
-      if (currentUser.email) {
+      if (currentUser.email && !currentUser.email.includes('Default')) {
           loadMasterData(currentUser.email);
       }
   }, [currentUser.email]);
@@ -85,7 +116,6 @@ export default function SettingsPage() {
     setLoading(true);
     
     try {
-      // PANGGIL API BACKEND BARU KITA
       const res = await fetch('/api/settings/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -97,7 +127,6 @@ export default function SettingsPage() {
       if (json.success) {
           const d = json.data;
           
-          // 1. Update State Data
           setCashierList(d.cashiers);
           setShiftList(d.shifts);
           setPromoList(d.promos);
@@ -108,12 +137,14 @@ export default function SettingsPage() {
           setUomList(d.uom);
           setAccountMapping(d.mapping);
 
-          // 2. Update User Profile (Sheet ID Real dari API)
           const updatedUser = { ...currentUser, sheetId: d.user.sheetId, name: d.user.name || currentUser.name, role: d.user.role || currentUser.role, email: emailToSync };
           setCurrentUser(updatedUser);
+          
+          // Update Session Storage agar konsisten
           localStorage.setItem('METALURGI_USER_SESSION', JSON.stringify(updatedUser));
+          // Update Master User agar konsisten saat refresh
+          localStorage.setItem('METALURGI_USER', JSON.stringify(updatedUser));
 
-          // 3. Save Context Locally
           localStorage.setItem('METALURGI_ACCOUNT_MAPPING', JSON.stringify(d.mapping));
           localStorage.setItem('METALURGI_MASTER_COA', JSON.stringify(d.coa));
           localStorage.setItem('METALURGI_POS_MASTERS', JSON.stringify({
@@ -122,16 +153,58 @@ export default function SettingsPage() {
 
       } else {
           console.error("API Error:", json.error);
-          alert("Gagal Sync: " + json.error);
       }
 
     } catch (error) {
       console.error("Network Error", error);
-      alert("Gagal menghubungi server. Periksa koneksi.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentUser]); // Added dependency to suppress warning
+
+  // --- [NEW FEATURE] HANDLE UPDATE PROFILE ---
+  const handleUpdateProfile = async () => {
+      if (!editForm.currentPassword) return alert("Wajib masukkan password saat ini untuk verifikasi.");
+      
+      setIsSaving(true);
+      try {
+          const res = await fetch('/api/settings/profile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  oldEmail: currentUser.email, // Email lama sebagai kunci pencarian
+                  password: editForm.currentPassword, // Password lama untuk security check
+                  newName: editForm.newName,
+                  newEmail: editForm.newEmail,
+                  newPassword: editForm.newPassword 
+              })
+          });
+
+          const json = await res.json();
+
+          if (!json.success) throw new Error(json.error);
+
+          // SUKSES: Update State & Local Storage
+          const updatedUser = { 
+              ...currentUser, 
+              name: json.user.name, 
+              email: json.user.email 
+          };
+          
+          setCurrentUser(updatedUser);
+          localStorage.setItem('METALURGI_USER', JSON.stringify(updatedUser));
+          localStorage.setItem('METALURGI_USER_EMAIL', json.user.email); // Update kunci POS
+          
+          setShowEditModal(false);
+          setEditForm(prev => ({ ...prev, currentPassword: '', newPassword: '' })); 
+          alert("✅ Profil Berhasil Diperbarui!");
+
+      } catch (err: any) {
+          alert("❌ Gagal: " + err.message);
+      } finally {
+          setIsSaving(false);
+      }
+  };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -159,15 +232,13 @@ export default function SettingsPage() {
 
   const handleLogout = () => {
       if(confirm('Anda yakin ingin keluar?')) {
-          localStorage.removeItem('METALURGI_USER_SESSION');
-          window.location.reload(); 
+          localStorage.clear(); // Bersihkan semua sesi
+          router.push('/login'); // Redirect ke login page
       }
   };
 
   const handleClearCache = () => {
-      if(confirm('Bersihkan cache browser? (Settingan lokal non-transaksi akan direset)')) {
-          localStorage.removeItem('METALURGI_PRICING_CONFIG');
-          localStorage.removeItem('METALURGI_COST_HISTORY');
+      if(confirm('Refresh sistem? (Data cloud aman)')) {
           window.location.reload();
       }
   };
@@ -195,6 +266,7 @@ export default function SettingsPage() {
       }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleOpenModal = (type: any) => { setModalType(type); setIsModalOpen(true); };
 
   return (
@@ -239,11 +311,19 @@ export default function SettingsPage() {
       {/* 1. ADMIN & PROFILE */}
       {activeTab === 'admin' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in slide-in-from-right-4 duration-300">
+              {/* CARD USER PROFILE */}
               <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
                   <div className="absolute top-0 right-0 p-4 opacity-10"><User size={120} /></div>
-                  <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-6 relative z-10"><UserCheck size={18} className="text-blue-600"/> User Profile</h3>
+                  <div className="flex justify-between items-start mb-6 relative z-10">
+                      <h3 className="font-bold text-slate-800 flex items-center gap-2"><UserCheck size={18} className="text-blue-600"/> User Profile</h3>
+                      {/* [NEW] Tombol Edit */}
+                      <button onClick={() => setShowEditModal(true)} className="text-xs flex items-center gap-1 bg-blue-50 text-blue-600 px-2 py-1 rounded font-bold hover:bg-blue-100 transition-colors">
+                          <Edit size={12}/> Edit Akun
+                      </button>
+                  </div>
+                  
                   <div className="flex items-center gap-4 mb-6 relative z-10">
-                      <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold text-2xl">
+                      <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold text-2xl uppercase">
                           {currentUser.name ? currentUser.name.charAt(0) : 'U'}
                       </div>
                       <div>
@@ -266,7 +346,7 @@ export default function SettingsPage() {
                           <div><p className="text-xs font-bold text-amber-800 uppercase">Total POS Transaksi</p><p className="text-xs text-amber-600">Disimpan di browser ini</p></div>
                           <div className="text-2xl font-bold text-amber-700">{localDataSize} <span className="text-sm font-normal">Trx</span></div>
                       </div>
-                      <div className="mt-4"><button onClick={handleClearCache} className="w-full px-4 py-2 bg-slate-100 text-slate-700 border border-slate-300 hover:bg-slate-200 rounded-lg font-bold text-sm flex items-center justify-center gap-2"><Trash2 size={16}/> Clear System Cache (Refresh)</button></div>
+                      <div className="mt-4"><button onClick={handleClearCache} className="w-full px-4 py-2 bg-slate-100 text-slate-700 border border-slate-300 hover:bg-slate-200 rounded-lg font-bold text-sm flex items-center justify-center gap-2"><RefreshCcw size={16}/> Refresh System</button></div>
                   </div>
 
                   <div className="bg-rose-50 p-6 rounded-xl border border-rose-200 shadow-sm">
@@ -360,7 +440,7 @@ export default function SettingsPage() {
           </div>
       )}
 
-      {/* --- MODAL (TETAP ADA) --- */}
+      {/* --- MODAL EDIT SHEET ID (OLD) --- */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
            <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl p-6">
@@ -374,11 +454,82 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* --- [NEW] MODAL EDIT PROFIL --- */}
+      {showEditModal && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+              <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+                  <div className="p-5 border-b flex justify-between items-center bg-slate-50">
+                      <h3 className="font-bold text-lg text-slate-800">Edit Profil</h3>
+                      <button onClick={() => setShowEditModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                      <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase">Nama Lengkap</label>
+                          <div className="relative mt-1">
+                              <User size={16} className="absolute left-3 top-2.5 text-slate-400"/>
+                              <input 
+                                  type="text" 
+                                  className="w-full pl-9 p-2 border rounded-lg text-sm font-bold text-slate-700"
+                                  value={editForm.newName}
+                                  onChange={e => setEditForm({...editForm, newName: e.target.value})}
+                              />
+                          </div>
+                      </div>
+                      <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase">Email (ID Login)</label>
+                          <div className="relative mt-1">
+                              <Mail size={16} className="absolute left-3 top-2.5 text-slate-400"/>
+                              <input 
+                                  type="email" 
+                                  className="w-full pl-9 p-2 border rounded-lg text-sm font-bold text-slate-700"
+                                  value={editForm.newEmail}
+                                  onChange={e => setEditForm({...editForm, newEmail: e.target.value})}
+                              />
+                          </div>
+                      </div>
+                      <div className="pt-2 border-t border-dashed">
+                          <label className="text-xs font-bold text-blue-600 uppercase">Password Baru (Opsional)</label>
+                          <div className="relative mt-1">
+                              <Lock size={16} className="absolute left-3 top-2.5 text-blue-300"/>
+                              <input 
+                                  type="password" 
+                                  placeholder="Biarkan kosong jika tidak diganti"
+                                  className="w-full pl-9 p-2 border border-blue-200 bg-blue-50 rounded-lg text-sm font-bold text-slate-700 placeholder:font-normal"
+                                  value={editForm.newPassword}
+                                  onChange={e => setEditForm({...editForm, newPassword: e.target.value})}
+                              />
+                          </div>
+                      </div>
+                      <div className="pt-4 mt-2">
+                          <label className="text-xs font-bold text-rose-600 uppercase mb-1 block">🔒 Password Saat Ini (Wajib)</label>
+                          <input 
+                              type="password" 
+                              placeholder="Verifikasi keamanan"
+                              className="w-full p-3 border border-rose-200 bg-rose-50 rounded-xl text-sm font-bold"
+                              value={editForm.currentPassword}
+                              onChange={e => setEditForm({...editForm, currentPassword: e.target.value})}
+                          />
+                      </div>
+                  </div>
+                  <div className="p-5 border-t bg-slate-50 flex gap-3">
+                      <button onClick={() => setShowEditModal(false)} className="flex-1 py-2 text-slate-500 font-bold hover:bg-slate-200 rounded-lg">Batal</button>
+                      <button 
+                        onClick={handleUpdateProfile} 
+                        disabled={isSaving}
+                        className="flex-1 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"
+                      >
+                          {isSaving ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>} Simpan
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
     </div>
   );
 }
 
-// Helper Component for Tables
+// Helper Component for Tables (EXISTING)
 function SimpleTable({headers, data, keys}: any) {
     return (
         <table className="w-full text-left text-sm">

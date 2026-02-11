@@ -9,13 +9,13 @@ export async function GET(req: Request) {
   }
 
   try {
-    // UPDATE: Menggunakan 'Master_Cashier' sesuai sheet kamu
     const ranges = [
-      "'Master_Product'!A:Z",    // 0: Produk
-      "'Inv_Movement'!A:Z",      // 1: Stok Server
-      "'Master_COA'!A:Z",         // 2: Akun GL
-      "'Master_Cashier'!A:Z",     // 3: DATA KASIR (Updated)
-      "'Master_Shift'!A:Z"        // 4: DATA SHIFT
+      "'Master_Product'!A:Z",    // 0
+      "'Inv_Movement'!A:Z",      // 1
+      "'Master_COA'!A:Z",        // 2
+      "'Master_Cashier'!A:Z",    // 3
+      "'Master_Shift'!A:Z",      // 4
+      "'Settings_Receipt'!A:Z"   // 5 [NEW] - Ambil Config Struk
     ];
 
     const response = await sheets.spreadsheets.values.batchGet({
@@ -25,15 +25,28 @@ export async function GET(req: Request) {
 
     const valueRanges = response.data.valueRanges;
     
+    // Helper untuk mengubah array of arrays menjadi object
+    // Contoh: [['Store_Name', 'Address'], ['Toko A', 'Jl. B']] -> { Store_Name: 'Toko A', Address: 'Jl. B' }
+    const parseReceiptConfig = (rows: any[]) => {
+        if (!rows || rows.length < 2) return {};
+        const headers = rows[0];
+        const values = rows[1];
+        const config: any = {};
+        headers.forEach((header: string, index: number) => {
+            config[header.trim()] = values[index] || '';
+        });
+        return config;
+    };
+
     return NextResponse.json({
       success: true,
       data: {
         products: valueRanges?.[0].values || [],
         movements: valueRanges?.[1].values || [],
         coa: valueRanges?.[2].values || [],
-        // Kita tetap namakan 'users' agar frontend tidak perlu diubah banyak
         users: valueRanges?.[3].values || [], 
-        shifts: valueRanges?.[4].values || []
+        shifts: valueRanges?.[4].values || [],
+        receipt: parseReceiptConfig(valueRanges?.[5].values || []) // [NEW] Parse Config
       }
     });
 
