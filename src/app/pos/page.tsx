@@ -5,7 +5,8 @@ import {
   Search, ShoppingCart, Trash2, CreditCard, Banknote, QrCode, 
   Store, LogOut, Printer, X, Loader2,
   User, Clock, Calendar, CheckCircle2,
-  FileDown, ClipboardList, Box, CloudUpload, RefreshCw, Database, Laptop2, Eraser, UploadCloud, ImageIcon
+  FileDown, ClipboardList, Box, CloudUpload, RefreshCw, Database, Laptop2, Eraser, UploadCloud, ImageIcon,
+  ChevronLeft, ChevronRight // Icon untuk Pagination
 } from 'lucide-react';
 
 import { useFetch } from '@/hooks/useFetch'; 
@@ -79,6 +80,10 @@ export default function PosPage() {
   const [historySearch, setHistorySearch] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'timestamp', direction: 'desc' });
 
+  // [NEW] STATE PAGINATION
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
   // --- STATE MISC ---
   const [printType, setPrintType] = useState<'receipt' | 'shift_report' | null>(null);
   const [shiftReportData, setShiftReportData] = useState<any>(null);
@@ -107,7 +112,7 @@ export default function PosPage() {
         const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
         if (savedLogo) setLogoPreview(savedLogo);
 
-        // --- LOAD RECEIPT CONFIG DARI LOCAL STORAGE (BACKUP) ---
+        // Load Receipt Config Backup
         const savedMasters = localStorage.getItem('METALURGI_POS_MASTERS');
         if (savedMasters) {
             try {
@@ -118,7 +123,7 @@ export default function PosPage() {
             } catch (e) { console.error("Gagal load config struk", e); }
         }
 
-        // --- LOAD OWNER EMAIL ---
+        // Load Owner Email
         const directEmail = localStorage.getItem('METALURGI_USER_EMAIL');
         if (directEmail) {
             setOwnerEmail(directEmail);
@@ -200,7 +205,10 @@ export default function PosPage() {
   }, [apiData]);
 
   // --- HELPER & LOGIC ---
-  const fmtMoney = (n: number) => "Rp " + n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const fmtMoney = (n: any) => {
+    const num = Number(n) || 0; // Jika n kosong/undefined, otomatis jadi 0
+    return "Rp " + num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  };
   
   const getProductPromo = (sku: string, basePrice: number) => {
       return { hasPromo: false, finalPrice: basePrice, discountVal: 0, label: '', minQty: 1 };
@@ -215,21 +223,21 @@ export default function PosPage() {
       return Math.max(0, sheetStock - soldLocally - inCart);
   };
 
+  // --- FETCH CLOUD DATA ---
   const fetchCloudData = async () => {
     if (!ownerEmail) return alert("Sesi Owner tidak terdeteksi. Silakan Login ulang di halaman utama.");
     
     setIsLoadingCloud(true);
     try {
+      // Ambil data Cloud (Biasanya semua data, nanti difilter di frontend)
       const res = await fetch(`/api/pos/report?email=${ownerEmail}`);
       const json = await res.json();
       if (json.success) {
         setCloudTransactions(json.data);
       } else {
-        console.error(json.error);
         alert("Gagal mengambil data Cloud: " + json.error);
       }
     } catch (err) {
-      console.error(err);
       alert("Koneksi gagal.");
     } finally {
       setIsLoadingCloud(false);
@@ -251,6 +259,7 @@ export default function PosPage() {
       end.setHours(23, 59, 59, 999);
 
       data = data.filter(t => { 
+          // [FIX LOGIC] Pastikan memfilter berdasarkan t.date (Tanggal Transaksi), bukan tanggal shift
           const tDate = new Date(t.date); 
           return tDate >= start && tDate <= end; 
       });
@@ -270,6 +279,14 @@ export default function PosPage() {
       });
       return data;
   }, [allTransactions, cloudTransactions, viewSource, dateRange, shiftFilter, historySearch, sortConfig]);
+
+  // [NEW] PAGINATION LOGIC
+  const paginatedHistory = useMemo(() => {
+      const startIndex = (currentPage - 1) * itemsPerPage;
+      return filteredHistory.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredHistory, currentPage]);
+
+  const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
 
   // --- SYNC LOGIC ---
   const runAutoSync = async (transaction: any) => {
@@ -418,12 +435,25 @@ export default function PosPage() {
   const handleProcessPayment = () => {
      if (amountPaid < cartTotal && paymentMethod === 'Cash') return alert("Uang pembayaran kurang!");
      
+     // [FIX LOGIC TANGGAL LIVE]
+     // Gunakan new Date() saat ini juga sebagai waktu transaksi, jangan ambil dari shift start time
+     const liveDate = new Date(); 
+     
      const trx = {
         id: `POS-${Math.floor(Math.random()*1000000)}`,
-        date: new Date().toISOString(), timestamp: new Date().toLocaleTimeString(),
-        items: cart, total: cartTotal, paymentMethod, amountPaid, change: Math.max(0, changeDue),
-        cashier: shiftData.cashierName, shift: shiftData.shiftName, shiftId: shiftData.id, isPrinted: false
+        date: liveDate.toISOString(), // Tanggal Live
+        timestamp: liveDate.toLocaleTimeString(), // Jam Live
+        items: cart, 
+        total: cartTotal, 
+        paymentMethod, 
+        amountPaid, 
+        change: Math.max(0, changeDue), 
+        cashier: shiftData.cashierName, 
+        shift: shiftData.shiftName, 
+        shiftId: shiftData.id, 
+        isPrinted: false
      };
+
      const newHistory = [trx, ...allTransactions];
      localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(newHistory));
      setAllTransactions(newHistory); 
@@ -432,7 +462,10 @@ export default function PosPage() {
 
      generatePOSJournals(trx);
      updateInventoryStock(trx);
+     
+     // Auto sync memanggil API yang sudah kita update tadi (untuk GL + POS Sheet)
      runAutoSync(trx);
+
      setCurrentTrx(trx); setShowPaymentModal(false); setCart([]); setShowSuccessModal(true);
   };
 
@@ -444,7 +477,6 @@ export default function PosPage() {
   const filteredProducts = products.filter(p => (activeCategory === 'All' || p.Category === activeCategory) && (p.Product_Name.toLowerCase().includes(searchTerm.toLowerCase()) || p.SKU.toLowerCase().includes(searchTerm.toLowerCase())));
 
   // --- TEMPLATES ---
-  // [FIX] Definisikan Template dengan benar sebelum return
   const ShiftReportTemplate = ({ data }: { data: any }) => (
       <>
          <div className="text-center mb-3">
@@ -541,12 +573,23 @@ export default function PosPage() {
             <div className="p-4 border-b border-slate-100 bg-white space-y-4">
                 <div className="flex flex-wrap items-center gap-3 justify-between">
                     <div className="flex gap-3">
+                        {/* [REVISI] Date Picker dengan Icon Calendar */}
                         <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
                             <Calendar size={14} className="text-slate-400"/>
                             <span className="text-xs font-bold text-slate-500">From</span>
-                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
+                            <input 
+                                type="date" 
+                                className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" 
+                                value={dateRange.start} 
+                                onChange={e => setDateRange({...dateRange, start: e.target.value})}
+                            />
                             <span className="text-xs font-bold text-slate-500">To</span>
-                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                            <input 
+                                type="date" 
+                                className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" 
+                                value={dateRange.end} 
+                                onChange={e => setDateRange({...dateRange, end: e.target.value})}
+                            />
                         </div>
                         <select className="text-xs p-2 rounded-lg border border-slate-200" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}>
                             <option value="all">Semua Shift</option>{masterShifts.map((s,i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name}</option>)}
@@ -577,21 +620,27 @@ export default function PosPage() {
                 </div>
             </div>
             
-            <div className="flex-1 overflow-auto p-0">
+            <div className="flex-1 overflow-auto p-0 flex flex-col justify-between">
                 {isLoadingCloud ? (
                    <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2"><Loader2 size={32} className="animate-spin"/><p className="text-sm">Mengambil data dari Cloud...</p></div>
                 ) : (
+                <>
                 <table className="w-full text-sm text-left">
                     <thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10">
                         <tr><th className="p-4">No. Transaksi</th><th className="p-4">Waktu</th><th className="p-4">Produk</th><th className="p-4 text-center">Qty</th><th className="p-4 text-right">Total (Rp)</th><th className="p-4 text-center">Action</th></tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                        {filteredHistory.map((trx, idx) => (
+                        {/* [REVISI] Gunakan paginatedHistory, BUKAN filteredHistory */}
+                        {paginatedHistory.map((trx, idx) => (
                             <tr key={idx} className="hover:bg-blue-50/50">
                                 <td className="p-4 font-mono font-bold text-xs text-slate-600 align-top">
                                   {trx.id} {trx.isCloud && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[9px]">CLOUD</span>}
                                 </td>
-                                <td className="p-4 text-slate-500 text-xs align-top"><div>{trx.date.split('T')[0]}</div><div>{trx.timestamp}</div></td>
+                                <td className="p-4 text-slate-500 text-xs align-top">
+                                    {/* [REVISI] Tampilkan Tanggal LIVE, bukan split string biasa yang rawan error */}
+                                    <div>{new Date(trx.date).toLocaleDateString()}</div>
+                                    <div>{new Date(trx.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                                </td>
                                 <td className="p-4 align-top"><div className="flex flex-col gap-1">{trx.items.map((it:any, i:number) => (<span key={i} className="text-xs text-slate-700">• {it.name} <span className="text-slate-400">x{it.qty}</span></span>))}</div></td>
                                 <td className="p-4 text-center font-bold align-top">{trx.items.reduce((a:any,b:any)=>a+b.qty,0)}</td>
                                 <td className="p-4 text-right font-bold text-slate-900 align-top">{fmtMoney(trx.total)}</td>
@@ -606,6 +655,32 @@ export default function PosPage() {
                         ))}
                     </tbody>
                 </table>
+                
+                {/* [NEW] Pagination Controls */}
+                {totalPages > 1 && (
+                    <div className="p-4 border-t border-slate-100 flex justify-between items-center bg-slate-50">
+                        <span className="text-xs text-slate-500">
+                            Page <b>{currentPage}</b> of <b>{totalPages}</b> ({filteredHistory.length} Total)
+                        </span>
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                                className="p-2 bg-white border rounded hover:bg-slate-100 disabled:opacity-50"
+                            >
+                                <ChevronLeft size={16}/>
+                            </button>
+                            <button 
+                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages}
+                                className="p-2 bg-white border rounded hover:bg-slate-100 disabled:opacity-50"
+                            >
+                                <ChevronRight size={16}/>
+                            </button>
+                        </div>
+                    </div>
+                )}
+                </>
                 )}
             </div>
         </div>
