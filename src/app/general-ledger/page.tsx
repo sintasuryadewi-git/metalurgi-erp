@@ -3,17 +3,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { 
   Search, Calendar, Download, FileText, 
-  ChevronRight, List, Loader2, RefreshCw, Calculator, Filter
+  ChevronRight, List, Loader2, RefreshCw, Calculator, Filter,
+  Lock, ShieldCheck, ChevronLeft 
 } from 'lucide-react';
 
 import { useFetch } from '@/hooks/useFetch'; 
 
-// --- KONFIGURASI AKUN STANDAR ---
-const ACC = {
-  AR: '1-1201', AP: '2-1001', BANK: '1-1002', KAS: '1-1001',
-  SALES: '4-1001', INVENTORY: '1-1301', HPP: '5-1001', EXP_DEFAULT: '6-0000'
-};
-
+// --- HELPER FORMATTING ---
 const fmtMoney = (n: number) => "Rp " + n.toLocaleString('id-ID');
 
 const parseAmount = (val: any) => {
@@ -23,169 +19,79 @@ const parseAmount = (val: any) => {
     return parseFloat(clean) || 0;
 };
 
+// Helper parsing tanggal Sheet
+const parseSheetDate = (dateStr: string) => {
+    if (!dateStr) return new Date().toISOString().split('T')[0];
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr; 
+    return d.toISOString().split('T')[0]; 
+};
+
 export default function GeneralLedgerPage() {
   
-  // --- STATE ---
+  // --- STATE UI ---
   const [activeAccountCode, setActiveAccountCode] = useState<string>('1-1001'); 
   const [searchTerm, setSearchTerm] = useState('');
   const [showMobileSidebar, setShowMobileSidebar] = useState(false); 
   
-  // Filter Tanggal
+  // --- STATE PAGINATION ---
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(50); 
+
+  // --- STATE DATA ---
   const [dateRange, setDateRange] = useState({
-    start: '2026-01-01', // Default awal tahun ini
+    start: '2026-01-01', 
     end: new Date().toISOString().split('T')[0]
   });
 
   const [masterCoa, setMasterCoa] = useState<any[]>([]);
-  const [allJournals, setAllJournals] = useState<any[]>([]);
+  const [glRawData, setGlRawData] = useState<any[]>([]); 
   const [isClient, setIsClient] = useState(false);
 
   // --- DATA FETCHING ---
   const { data: apiData, loading } = useFetch<any>('/api/general-ledger');
 
-  const processSheetData = (rows: any[]) => {
-      if (!rows || rows.length < 2) return [];
-      const headers = rows[0].map((h: string) => h.trim()); 
-      return rows.slice(1).map((row) => {
-          let obj: any = {};
-          headers.forEach((header: string, index: number) => {
-              obj[header] = row[index] || ''; 
-          });
-          return obj;
-      });
-  };
-
-  // --- ENGINE: CONSOLIDATION (SERVER + POS) ---
+  // --- ENGINE: LOAD DATA ---
   useEffect(() => {
     setIsClient(true);
     if (!apiData) return;
 
     try {
-        const coa = processSheetData(apiData.coa);
-        setMasterCoa(coa);
-
-        const sales = processSheetData(apiData.sales);
-        const purchase = processSheetData(apiData.purchases);
-        const expense = processSheetData(apiData.expenses);
-        const payment = processSheetData(apiData.payments);
-        const products = processSheetData(apiData.products); 
-
-        // Load Local Data
-        let overrides: Record<string, any[]> = {};
-        let manualTrx: any[] = [];
-        let posTrx: any[] = []; 
-        
-        if (typeof window !== 'undefined') {
-           const savedOverrides = localStorage.getItem('METALURGI_JOURNAL_OVERRIDES');
-           if (savedOverrides) overrides = JSON.parse(savedOverrides);
-
-           const savedManuals = localStorage.getItem('METALURGI_MANUAL_TRX');
-           if (savedManuals) manualTrx = JSON.parse(savedManuals);
-
-           const savedPosTrx = localStorage.getItem('METALURGI_POS_TRX');
-           if (savedPosTrx) posTrx = JSON.parse(savedPosTrx);
+        // 1. Process COA
+        const coaRows = apiData.coa || [];
+        if (coaRows.length > 1) {
+            const headers = coaRows[0].map((h:string) => h.trim());
+            const coaObjs = coaRows.slice(1).map((row:any) => {
+                let obj:any = {};
+                headers.forEach((h:string, i:number) => obj[h] = row[i]);
+                return obj;
+            });
+            setMasterCoa(coaObjs);
         }
 
-        const getAccounts = (id: string, defDebit: string, defCredit: string) => {
-           if (overrides[id]) {
-              const deb = overrides[id].find((j: any) => j.pos === 'Debit');
-              const cred = overrides[id].find((j: any) => j.pos === 'Credit');
-              return { debit: deb ? deb.acc.code : defDebit, credit: cred ? cred.acc.code : defCredit };
-           }
-           return { debit: defDebit, credit: defCredit };
-        };
-
-        let generatedJournals: any[] = [];
-
-        // 1. SALES (Server)
-        sales.forEach((r: any) => {
-           const total = parseAmount(r.Qty) * parseAmount(r.Unit_Price);
-           const accs = getAccounts(r.Inv_Number, ACC.AR, ACC.SALES);
-           generatedJournals.push({ date: r.Trx_Date, ref: r.Inv_Number, desc: `Sales Invoice`, debit_acc: accs.debit, credit_acc: accs.credit, amount: total });
-           
-           const prod = products.find((p:any) => p.SKU === r.Product_SKU);
-           const cost = parseAmount(prod?.Std_Cost_Budget);
-           if(cost > 0) {
-               generatedJournals.push({ date: r.Trx_Date, ref: r.Inv_Number, desc: `COGS`, debit_acc: ACC.HPP, credit_acc: ACC.INVENTORY, amount: cost * parseAmount(r.Qty) });
-           }
-        });
-
-        // 2. PURCHASE (Server)
-        purchase.forEach((r: any) => {
-           const total = parseAmount(r.Qty) * parseAmount(r.Unit_Cost);
-           const accs = getAccounts(r.Bill_Number, ACC.INVENTORY, ACC.AP);
-           generatedJournals.push({ date: r.Trx_Date, ref: r.Bill_Number, desc: `Purchase Stock`, debit_acc: accs.debit, credit_acc: accs.credit, amount: total });
-        });
-
-        // 3. EXPENSE (Server)
-        expense.forEach((r: any, idx: number) => {
-           const id = `EXP-${idx+1}`; 
-           const amount = parseAmount(r.Amount);
-           const accs = getAccounts(id, r.Expense_Account || ACC.EXP_DEFAULT, ACC.BANK);
-           if (amount > 0) {
-               generatedJournals.push({ date: r.Trx_Date, ref: id, desc: r.Desc, debit_acc: accs.debit, credit_acc: accs.credit, amount: amount });
-           }
-        });
-
-        // 4. PAYMENT (Server)
-        payment.forEach((r: any, idx: number) => {
-           const id = `PAY-${idx}`; 
-           const amt = parseAmount(r.Amount);
-           const bank = r.Account_Code || ACC.BANK;
-           if(r.Payment_Type === 'IN') {
-              const accs = getAccounts(id, bank, ACC.AR);
-              generatedJournals.push({ date: r.Trx_Date, ref: id, desc: `Payment In`, debit_acc: accs.debit, credit_acc: accs.credit, amount: amt });
-           } else {
-              const accs = getAccounts(id, ACC.AP, bank);
-              generatedJournals.push({ date: r.Trx_Date, ref: id, desc: `Payment Out`, debit_acc: accs.debit, credit_acc: accs.credit, amount: amt });
-           }
-        });
-
-        // 5. MANUAL TRX
-        manualTrx.forEach((tx: any) => {
-            let debit = '', credit = '';
-            if (tx.type === 'sales') { debit = ACC.AR; credit = ACC.SALES; }
-            else if (tx.type === 'purchase') { debit = ACC.INVENTORY; credit = ACC.AP; }
-            else if (tx.type === 'expense') { debit = ACC.EXP_DEFAULT; credit = ACC.BANK; }
-            const accs = getAccounts(tx.id, debit, credit);
-            generatedJournals.push({ date: tx.date, ref: tx.id, desc: `Manual: ${tx.desc}`, debit_acc: accs.debit, credit_acc: accs.credit, amount: tx.amount });
-        });
-
-        // 6. POS TRANSACTIONS
-        posTrx.forEach((trx: any) => {
-            const isCash = !trx.paymentMethod || trx.paymentMethod === 'Cash';
-            const debitAcc = isCash ? ACC.KAS : ACC.BANK;
-            
-            generatedJournals.push({
-                date: trx.date, ref: trx.id, 
-                desc: `POS Sales (${trx.items.length} items)`,
-                debit_acc: debitAcc, credit_acc: ACC.SALES, 
-                amount: parseFloat(trx.total || 0)
-            });
-
-            trx.items.forEach((item: any) => {
-                const prod = products.find((p:any) => p.SKU === item.sku);
-                const unitCost = parseAmount(prod?.Std_Cost_Budget);
-                if (unitCost > 0) {
-                    generatedJournals.push({
-                        date: trx.date, ref: trx.id, 
-                        desc: `Cost: ${item.name}`,
-                        debit_acc: ACC.HPP, credit_acc: ACC.INVENTORY,
-                        amount: unitCost * item.qty
-                    });
-                }
-            });
-        });
+        // 2. Process General Ledger
+        const glRows = apiData.gl || [];
+        const dataRows = glRows.slice(1);
         
-        generatedJournals.sort((a, b) => a.date.localeCompare(b.date));
-        setAllJournals(generatedJournals);
+        const formattedGL = dataRows.map((row: any) => ({
+            journal_id: row[0],
+            date: parseSheetDate(row[1]),
+            account_code: String(row[2]),
+            desc: row[3],
+            debit: parseAmount(row[4]),
+            credit: parseAmount(row[5]),
+            ref_id: row[6]
+        }));
+
+        formattedGL.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        setGlRawData(formattedGL);
 
     } catch (err) {
         console.error("GL Calculation Error", err);
     }
   }, [apiData]);
 
-  // --- GROUP COA FOR SIDEBAR ---
+  // --- SIDEBAR GROUPING ---
   const groupedCoa = useMemo(() => {
     const groups: Record<string, any[]> = {};
     const filtered = masterCoa.filter((c:any) => 
@@ -200,193 +106,229 @@ export default function GeneralLedgerPage() {
     return Object.entries(groups).map(([category, accounts]) => ({ category, accounts }));
   }, [masterCoa, searchTerm]);
 
-  // --- FILTER LEDGER FOR SELECTED ACCOUNT ---
+  // --- CALCULATION ENGINE ---
   const activeAccountInfo = masterCoa.find((c:any) => c.Account_Code === activeAccountCode);
   
-  const ledgerData = useMemo(() => {
+  const fullLedgerData = useMemo(() => {
     if (!activeAccountCode) return { entries: [], totalDebit: 0, totalCredit: 0, finalBalance: 0, startBalance: 0 };
 
-    // 1. Ambil Saldo Awal dari Master COA
     const initialFromCOA = parseAmount(activeAccountInfo?.Opening_Balance || activeAccountInfo?.Saldo_Awal);
-    
-    // Tentukan Normal Balance
-    const isNormalDebit = ['1','5','6','Harta','Beban'].some(p => activeAccountCode.startsWith(p) || activeAccountInfo?.Type?.includes(p));
+    const isNormalDebit = ['1','5','6','Harta','Beban','Asset','Expense'].some(p => activeAccountCode.startsWith(p) || (activeAccountInfo?.Type || '').includes(p));
 
-    // 2. Logic Running Balance "Carry Over"
-    // Kita harus hitung dari awal waktu sampai hari ini, tapi pisahkan mana yg "Saldo Awal" mana yg "Mutasi Periode Ini"
-    
     let runningBalance = initialFromCOA;
-    let periodStartBalance = initialFromCOA; // Ini saldo per tanggal start filter
+    let periodStartBalance = initialFromCOA; 
     
     let totalDebit = 0;
     let totalCredit = 0;
-    let displayEntries: any[] = [];
+    let periodEntries: any[] = [];
 
-    // Loop SEMUA jurnal (sudah urut tanggal)
-    allJournals.forEach((j:any) => {
-        // Cek apakah jurnal ini melibatkan akun aktif
-        const isDebit = j.debit_acc === activeAccountCode;
-        const isCredit = j.credit_acc === activeAccountCode;
+    glRawData.forEach((j:any) => {
+        if (j.account_code !== activeAccountCode) return;
 
-        if (!isDebit && !isCredit) return;
+        const debitAmount = j.debit || 0;
+        const creditAmount = j.credit || 0;
 
-        const amount = j.amount || 0;
-        const debitAmount = isDebit ? amount : 0;
-        const creditAmount = isCredit ? amount : 0;
-
-        // Update Running Balance Global
         if (isNormalDebit) runningBalance += (debitAmount - creditAmount);
         else runningBalance += (creditAmount - debitAmount);
 
-        // Logic Pemisahan Periode
         if (j.date < dateRange.start) {
-            // Transaksi MASA LALU -> Update saldo awal periode saja
             periodStartBalance = runningBalance;
         } else if (j.date <= dateRange.end) {
-            // Transaksi DALAM PERIODE -> Masukkan ke tabel
             totalDebit += debitAmount;
             totalCredit += creditAmount;
             
-            displayEntries.push({
+            periodEntries.push({
                 ...j,
-                debit: debitAmount,
-                credit: creditAmount,
-                balance: runningBalance
+                balance: runningBalance 
             });
         }
     });
 
-    // Tambahkan "Saldo Awal Periode" sebagai baris pertama
-    const entriesWithOpening = [
-        {
-            date: dateRange.start,
-            ref: '-',
-            desc: 'Saldo Awal Periode (Opening Balance)',
-            debit: 0,
-            credit: 0,
-            balance: periodStartBalance,
-            isSystemRow: true
-        },
-        ...displayEntries
-    ];
-
     return { 
-        entries: entriesWithOpening, 
+        entries: periodEntries, 
         totalDebit, 
         totalCredit, 
         finalBalance: runningBalance, 
         startBalance: periodStartBalance 
     };
 
-  }, [allJournals, activeAccountCode, activeAccountInfo, dateRange]);
+  }, [glRawData, activeAccountCode, activeAccountInfo, dateRange]);
+
+  // --- PAGINATION LOGIC ---
+  const paginatedData = useMemo(() => {
+      const startEntry = {
+          journal_id: 'SYS-OPEN',
+          date: dateRange.start,
+          ref_id: '-',
+          desc: 'Saldo Awal Periode (Opening Balance)',
+          debit: 0,
+          credit: 0,
+          balance: fullLedgerData.startBalance,
+          isSystemRow: true
+      };
+
+      const allRows = [startEntry, ...fullLedgerData.entries];
+      const startIndex = (currentPage - 1) * itemsPerPage;
+      const sliced = allRows.slice(startIndex, startIndex + itemsPerPage);
+      
+      return {
+          rows: sliced,
+          totalPages: Math.ceil(allRows.length / itemsPerPage),
+          totalItems: allRows.length
+      };
+  }, [fullLedgerData, currentPage, itemsPerPage, dateRange.start]);
+
+  useEffect(() => { setCurrentPage(1); }, [activeAccountCode, dateRange, itemsPerPage]);
 
   if (!isClient) return null;
 
   return (
-    <div className="pb-20 h-[calc(100vh-6rem)] flex flex-col font-sans">
+    <div className="h-[calc(100vh-4rem)] flex flex-col font-sans bg-slate-50/50">
       
-      {/* HEADER */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+      {/* HEADER PAGE */}
+      <div className="px-6 py-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white border-b border-slate-200">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <FileText className="text-blue-600"/> Buku Besar
-            {loading && <Loader2 className="animate-spin text-slate-400" size={18}/>}
+            {loading && <Loader2 className="animate-spin text-slate-400" size={16}/>}
           </h1>
-          <p className="text-slate-500 text-xs mt-1">Detail mutasi & saldo per akun (Real-time Integration).</p>
+          <p className="text-slate-500 text-xs mt-1 flex items-center gap-1">
+            <ShieldCheck size={12} className="text-emerald-600"/> 
+            Source: <span className="font-mono font-bold bg-slate-100 px-1 rounded">General_Ledger</span>
+          </p>
         </div>
         
-        <div className="flex gap-2 w-full md:w-auto">
-           <button onClick={() => setShowMobileSidebar(!showMobileSidebar)} className="md:hidden flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-50 text-blue-700 font-bold rounded-lg border border-blue-200 text-sm">
-             <List size={16}/> {showMobileSidebar ? 'Tutup Akun' : 'Pilih Akun'}
+        <div className="flex gap-2">
+           <button onClick={() => setShowMobileSidebar(!showMobileSidebar)} className="md:hidden px-3 py-2 bg-blue-50 text-blue-700 font-bold rounded-lg text-xs border border-blue-200">
+             <List size={14}/> Akun
            </button>
-           <button onClick={() => window.location.reload()} className="p-2 border rounded-lg hover:bg-slate-50 text-slate-600 bg-white" title="Refresh Data"><RefreshCw size={20}/></button>
-           <button className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-50"><Download size={16}/> <span className="hidden md:inline">Export</span></button>
+           <button onClick={() => window.location.reload()} className="p-2 border rounded-lg hover:bg-slate-50 text-slate-600 bg-white" title="Sync Data"><RefreshCw size={16}/></button>
+           <button className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 shadow-sm"><Download size={14}/> Export</button>
         </div>
       </div>
 
-      {/* MAIN CONTENT */}
-      <div className="flex flex-col md:flex-row flex-1 gap-6 overflow-hidden relative">
+      {/* MAIN CONTENT WRAPPER */}
+      <div className="flex-1 flex overflow-hidden">
         
-        {/* SIDEBAR COA */}
-        <div className={`absolute md:relative z-20 top-0 left-0 h-full w-full md:w-80 bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden shadow-lg md:shadow-sm transition-transform duration-300 ${showMobileSidebar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-           <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-              <div className="relative flex-1 mr-2">
-                 <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
-                 <input type="text" placeholder="Cari Akun..." className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+        {/* SIDEBAR COA (LEFT) */}
+        <div className={`fixed inset-y-0 left-0 z-30 w-72 bg-white border-r border-slate-200 transform transition-transform duration-300 md:relative md:translate-x-0 ${showMobileSidebar ? 'translate-x-0' : '-translate-x-full'}`}>
+           <div className="p-4 border-b border-slate-100 bg-slate-50">
+              <div className="relative">
+                 <Search className="absolute left-3 top-2.5 text-slate-400" size={14}/>
+                 <input type="text" placeholder="Cari Akun..." className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white font-medium" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
               </div>
-              <button onClick={() => setShowMobileSidebar(false)} className="md:hidden p-2 bg-slate-200 rounded-full"><ChevronRight size={16}/></button>
            </div>
-           
-           <div className="flex-1 overflow-y-auto p-2 space-y-4">
-              {loading ? (
-                 <div className="p-4 text-center text-slate-400 text-sm"><Loader2 className="animate-spin mx-auto mb-2"/> Loading COA...</div>
-              ) : groupedCoa.map((cat, idx) => (
-                 <div key={idx}>
-                    <h4 className="px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">{cat.category}</h4>
-                    <div className="space-y-0.5">
-                       {cat.accounts.map((acc: any) => (
-                          <button key={acc.Account_Code} onClick={() => { setActiveAccountCode(acc.Account_Code); setShowMobileSidebar(false); }} className={`w-full text-left px-3 py-3 md:py-2 rounded-lg text-sm flex justify-between items-center transition-all ${activeAccountCode === acc.Account_Code ? 'bg-blue-50 text-blue-700 font-bold ring-1 ring-blue-200' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}>
-                             <span>{acc.Account_Name}</span><span className="text-[10px] font-mono opacity-50">{acc.Account_Code}</span>
-                          </button>
-                       ))}
-                    </div>
+           <div className="overflow-y-auto h-full pb-20 p-2 space-y-1">
+              {loading ? <div className="p-4 text-center text-xs text-slate-400">Loading...</div> : groupedCoa.map((cat, idx) => (
+                 <div key={idx} className="mb-2">
+                    <h4 className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50 rounded mb-1">{cat.category}</h4>
+                    {cat.accounts.map((acc: any) => (
+                        <button key={acc.Account_Code} onClick={() => { setActiveAccountCode(acc.Account_Code); setShowMobileSidebar(false); }} className={`w-full text-left px-3 py-2 rounded-md text-xs flex justify-between items-center transition-all ${activeAccountCode === acc.Account_Code ? 'bg-blue-600 text-white font-bold shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}>
+                            <span className="truncate w-40">{acc.Account_Name}</span>
+                            <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${activeAccountCode === acc.Account_Code ? 'bg-blue-500/50 text-white' : 'bg-slate-200 text-slate-500'}`}>{acc.Account_Code}</span>
+                        </button>
+                    ))}
                  </div>
               ))}
            </div>
         </div>
 
-        {/* RIGHT CONTENT: LEDGER TABLE */}
-        <div className="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden w-full">
-           <div className="p-4 md:p-6 border-b border-slate-100 bg-white space-y-4">
-              <div className="flex flex-col md:flex-row justify-between items-start gap-4">
-                 <div className="flex flex-col gap-1">
-                    <h2 className="text-lg md:text-xl font-bold text-slate-800">{activeAccountInfo?.Account_Name || 'Pilih Akun'}</h2>
-                    <div className="flex gap-2"><span className="bg-slate-100 text-slate-500 text-xs font-mono px-2 py-0.5 rounded font-bold">{activeAccountCode}</span><span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border`}>{activeAccountInfo?.Type || '-'}</span></div>
-                 </div>
-                 
-                 <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-lg border border-slate-200 w-full md:w-auto">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase ml-2 hidden md:inline">Periode:</span>
-                    <input type="date" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})} className="text-xs bg-white border rounded px-2 py-2 text-slate-600 flex-1"/>
-                    <span className="text-slate-400">-</span>
-                    <input type="date" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})} className="text-xs bg-white border rounded px-2 py-2 text-slate-600 flex-1"/>
+        {/* DATA TABLE (RIGHT) */}
+        <div className="flex-1 flex flex-col overflow-hidden bg-white w-full">
+           
+           {/* INFO BAR & FILTER */}
+           <div className="px-6 py-4 border-b border-slate-100 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 bg-white">
+              {/* Selected Account */}
+              <div className="lg:col-span-2">
+                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    {activeAccountInfo?.Account_Name || 'Pilih Akun'}
+                    <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded border border-slate-200">{activeAccountCode}</span>
+                 </h2>
+                 <div className="flex gap-4 mt-2">
+                    <div><p className="text-[10px] text-slate-400 font-bold uppercase">Saldo Awal</p><p className="text-sm font-bold text-amber-600">{fmtMoney(fullLedgerData.startBalance)}</p></div>
+                    <div><p className="text-[10px] text-slate-400 font-bold uppercase">Mutasi Debit</p><p className="text-sm font-bold text-emerald-600">{fmtMoney(fullLedgerData.totalDebit)}</p></div>
+                    <div><p className="text-[10px] text-slate-400 font-bold uppercase">Mutasi Kredit</p><p className="text-sm font-bold text-rose-600">{fmtMoney(fullLedgerData.totalCredit)}</p></div>
                  </div>
               </div>
 
-              <div className="flex overflow-x-auto gap-4 pb-2 md:pb-0 items-center no-scrollbar">
-                 <div className="px-4 py-2 bg-amber-50 rounded-xl border border-amber-100 flex-shrink-0">
-                    <p className="text-[10px] text-amber-600 font-bold uppercase flex items-center gap-1"><Calculator size={10}/> Saldo Awal</p>
-                    <div className="flex items-center gap-1 mt-1"><span className="text-xs text-amber-700 font-bold">Rp</span><p className="text-sm font-bold text-amber-800">{fmtMoney(ledgerData.startBalance).replace('Rp ', '')}</p></div>
+              {/* Date Filter & Saldo Akhir */}
+              <div className="lg:col-span-2 flex flex-col items-end justify-between">
+                 <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-lg border border-slate-200">
+                    <input type="date" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})} className="bg-transparent text-xs font-bold text-slate-600 px-2 outline-none cursor-pointer"/>
+                    <span className="text-slate-300">|</span>
+                    <input type="date" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})} className="bg-transparent text-xs font-bold text-slate-600 px-2 outline-none cursor-pointer"/>
                  </div>
-                 <div className="h-8 w-px bg-slate-200 hidden md:block"></div>
-                 <div className="px-3 py-2 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0"><p className="text-[10px] text-slate-400 font-bold uppercase">Mutasi Debit</p><p className="font-bold text-emerald-600 text-sm">{fmtMoney(ledgerData.totalDebit)}</p></div>
-                 <div className="px-3 py-2 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0"><p className="text-[10px] text-slate-400 font-bold uppercase">Mutasi Kredit</p><p className="font-bold text-rose-600 text-sm">{fmtMoney(ledgerData.totalCredit)}</p></div>
-                 <div className="px-3 py-2 bg-blue-600 rounded-lg border border-blue-600 shadow-md flex-shrink-0"><p className="text-[10px] text-blue-100 font-bold uppercase">Saldo Akhir</p><p className="font-bold text-white text-sm">{fmtMoney(ledgerData.finalBalance)}</p></div>
+                 <div className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-md text-right mt-2 w-full md:w-auto">
+                    <p className="text-[10px] font-bold opacity-80 uppercase">Saldo Akhir</p>
+                    <p className="text-lg font-bold">{fmtMoney(fullLedgerData.finalBalance)}</p>
+                 </div>
               </div>
            </div>
 
+           {/* TABLE AREA - FULL HEIGHT */}
            <div className="flex-1 overflow-auto bg-slate-50/30">
-              <table className="w-full text-left text-sm min-w-[600px]">
-                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold sticky top-0 z-10 border-b border-slate-100 shadow-sm">
-                    <tr><th className="p-4 w-[15%]">Tanggal</th><th className="p-4 w-[15%]">No. Ref</th><th className="p-4 w-[30%]">Deskripsi</th><th className="p-4 w-[15%] text-right text-emerald-600">Debit</th><th className="p-4 w-[15%] text-right text-rose-600">Kredit</th><th className="p-4 w-[10%] text-right text-slate-800">Saldo</th></tr>
+              <table className="w-full text-left text-xs min-w-[900px]">
+                 <thead className="bg-slate-50 text-slate-500 font-bold sticky top-0 z-10 border-b border-slate-200 shadow-sm">
+                    <tr>
+                        <th className="px-4 py-3 w-[100px]">Tanggal</th>
+                        <th className="px-4 py-3 w-[140px]">Journal ID <Lock size={10} className="inline ml-1 opacity-40"/></th>
+                        <th className="px-4 py-3 w-[120px]">Ref ID</th>
+                        <th className="px-4 py-3">Deskripsi</th>
+                        <th className="px-4 py-3 text-right w-[120px]">Debit</th>
+                        <th className="px-4 py-3 text-right w-[120px]">Kredit</th>
+                        <th className="px-4 py-3 text-right w-[140px]">Saldo</th>
+                    </tr>
                  </thead>
                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {ledgerData.entries.length === 0 ? (
-                       <tr><td colSpan={6} className="p-10 text-center text-slate-400 italic">Belum ada transaksi di periode ini.</td></tr>
+                    {paginatedData.rows.length === 0 ? (
+                       <tr><td colSpan={7} className="p-10 text-center text-slate-400 italic">Tidak ada transaksi.</td></tr>
                     ) : (
-                       ledgerData.entries.map((row:any, idx:number) => (
-                          <tr key={idx} className={`transition-colors group ${row.isSystemRow ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-blue-50/30'}`}>
-                             <td className="p-4 text-slate-600 font-medium whitespace-nowrap">{row.date}</td>
-                             <td className="p-4"><span className={`font-mono text-[10px] px-1.5 py-0.5 rounded flex items-center w-fit gap-1 whitespace-nowrap ${row.isSystemRow ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{row.ref}</span></td>
-                             <td className={`p-4 min-w-[200px] ${row.isSystemRow ? 'font-bold text-amber-800 italic' : 'text-slate-700'}`}>{row.desc}</td>
-                             <td className="p-4 text-right font-medium text-emerald-600 whitespace-nowrap">{row.debit > 0 ? fmtMoney(row.debit) : '-'}</td>
-                             <td className="p-4 text-right font-medium text-rose-600 whitespace-nowrap">{row.credit > 0 ? fmtMoney(row.credit) : '-'}</td>
-                             <td className="p-4 text-right font-bold text-slate-800 bg-slate-50/50 whitespace-nowrap">{fmtMoney(row.balance)}</td>
+                       paginatedData.rows.map((row:any, idx:number) => (
+                          <tr key={idx} className={`hover:bg-blue-50/50 transition-colors ${row.isSystemRow ? 'bg-amber-50 font-bold text-amber-900' : ''}`}>
+                             <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{row.date}</td>
+                             <td className="px-4 py-3 font-mono text-[10px] text-slate-500">{row.journal_id}</td>
+                             <td className="px-4 py-3">
+                                 {!row.isSystemRow && <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200">{row.ref_id}</span>}
+                             </td>
+                             <td className="px-4 py-3 text-slate-700 truncate max-w-[300px]" title={row.desc}>{row.desc}</td>
+                             <td className="px-4 py-3 text-right font-medium text-emerald-600">{row.debit > 0 ? fmtMoney(row.debit) : '-'}</td>
+                             <td className="px-4 py-3 text-right font-medium text-rose-600">{row.credit > 0 ? fmtMoney(row.credit) : '-'}</td>
+                             <td className="px-4 py-3 text-right font-bold text-slate-800 bg-slate-50/30">{fmtMoney(row.balance)}</td>
                           </tr>
                        ))
                     )}
                  </tbody>
               </table>
            </div>
+
+           {/* PAGINATION FOOTER */}
+           <div className="px-6 py-3 border-t border-slate-200 bg-white flex justify-between items-center text-xs">
+                <div className="flex items-center gap-2 text-slate-500">
+                    <span>Show:</span>
+                    <select 
+                        value={itemsPerPage} 
+                        onChange={(e) => setItemsPerPage(Number(e.target.value))} 
+                        className="bg-slate-50 border border-slate-200 rounded p-1 font-bold outline-none"
+                    >
+                        <option value={20}>20</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                        <option value={500}>500</option>
+                    </select>
+                    <span>Rows / Page</span>
+                </div>
+
+                <div className="flex items-center gap-4">
+                    <span className="text-slate-500">
+                        Page <b>{currentPage}</b> of <b>{paginatedData.totalPages}</b> (Total {paginatedData.totalItems})
+                    </span>
+                    <div className="flex gap-1">
+                        <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-2 border rounded hover:bg-slate-50 disabled:opacity-50"><ChevronLeft size={14}/></button>
+                        <button onClick={() => setCurrentPage(p => Math.min(paginatedData.totalPages, p + 1))} disabled={currentPage === paginatedData.totalPages} className="p-2 border rounded hover:bg-slate-50 disabled:opacity-50"><ChevronRight size={14}/></button>
+                    </div>
+                </div>
+           </div>
+
         </div>
       </div>
     </div>

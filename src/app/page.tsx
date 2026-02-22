@@ -21,11 +21,12 @@ export default function Dashboard() {
   const [customEndDate, setCustomEndDate] = useState('');
   const [isClient, setIsClient] = useState(false);
 
-  // STATE: Data Lokal (POS & GL)
+  // STATE: Data Lokal (POS - Transaction Log) 
+  // Kita tetap butuh ini untuk update real-time sebelum sync trigger berjalan
   const [localPosTrx, setLocalPosTrx] = useState<any[]>([]);
-  const [localGlJournals, setLocalGlJournals] = useState<any[]>([]);
 
   // --- 1. DATA FETCHING (API SERVER) ---
+  // API ini sekarang sudah mengambil data dari 'Trx_POS' dan 'General_Ledger'
   const { data: apiData, loading, error } = useFetch<any>('/api/dashboard');
 
   // --- 2. LOAD DATA LOCAL SAAT MOUNT ---
@@ -34,9 +35,6 @@ export default function Dashboard() {
     if (typeof window !== 'undefined') {
         const savedPos = localStorage.getItem('METALURGI_POS_TRX');
         if (savedPos) setLocalPosTrx(JSON.parse(savedPos));
-
-        const savedGl = localStorage.getItem('METALURGI_GL_JOURNALS');
-        if (savedGl) setLocalGlJournals(JSON.parse(savedGl));
     }
   }, []);
 
@@ -54,16 +52,16 @@ export default function Dashboard() {
   };
 
   // --- 4. MEMOIZED DATA PROCESSING ---
-  const { sheetSales, sheetExpense, sheetPurchases, sheetProducts, sheetCoa, sheetPayments } = useMemo(() => {
-      if (!apiData) return { sheetSales: [], sheetExpense: [], sheetPurchases: [], sheetProducts: [], sheetCoa: [], sheetPayments: [] };
+  const { sheetPosTrx, sheetGl, sheetExpense, sheetPurchases, sheetProducts } = useMemo(() => {
+      if (!apiData) return { sheetPosTrx: [], sheetGl: [], sheetExpense: [], sheetPurchases: [], sheetProducts: [] };
 
+      // Mapping Data dari API Dashboard yang baru
       return {
-          sheetSales: processSheetData(apiData.sales),
-          sheetExpense: processSheetData(apiData.expenses),
-          sheetPurchases: processSheetData(apiData.purchases || []),
-          sheetProducts: processSheetData(apiData.products || []),
-          sheetCoa: processSheetData(apiData.coa || []),         // Penting untuk Saldo Awal Kas
-          sheetPayments: processSheetData(apiData.payments || []) // Penting untuk Arus Kas Server
+          sheetPosTrx: processSheetData(apiData.sales || []),    // Log Detail Barang (Trx_POS)
+          sheetGl: processSheetData(apiData.gl || []),           // Log Keuangan (General_Ledger)
+          sheetExpense: processSheetData(apiData.expenses || []), // Log Detail Biaya
+          sheetPurchases: processSheetData(apiData.purchases || []), // Log Pembelian
+          sheetProducts: processSheetData(apiData.products || []), // Master Produk
       };
   }, [apiData]);
 
@@ -101,146 +99,153 @@ export default function Dashboard() {
   };
 
   // =================================================================================
-  // ⚡ CORE LOGIC: CASH ON HAND (METODE AKUNTANSI MURNI)
+  // ⚡ CORE LOGIC 1: FINANCIAL STATS (SUMBER: GENERAL LEDGER) - THE SINGLE SOURCE OF TRUTH
   // =================================================================================
   
-  const CASH_ON_HAND = useMemo(() => {
-      let totalCash = 0;
+  const FINANCIALS = useMemo(() => {
+      let revenue = 0;
+      let cogs = 0;
+      let opex = 0;
+      let cashOnHand = 0;
 
-      // 1. Saldo Awal Server (Master COA)
-      sheetCoa.forEach((acc: any) => {
-          if (String(acc.Account_Code).startsWith('1-10')) { // Akun 1-10xx (Kas & Bank)
-              totalCash += parseFloat(acc.Opening_Balance || 0);
+      // A. PROSES DATA CLOUD (General Ledger)
+      sheetGl.forEach((row: any) => {
+          // 1. CASH ON HAND (Akun 1-10xx) - Saldo Kumulatif (Tidak kena filter tanggal)
+          // Debit = Uang Masuk, Kredit = Uang Keluar
+          if (String(row.Account_Code).startsWith('1-10')) {
+              cashOnHand += (parseFloat(row.Debit || 0) - parseFloat(row.Credit || 0));
+          }
+
+          // 2. PROFIT LOSS (Kena Filter Tanggal)
+          if (isWithinRange(row.Date)) {
+              const debit = parseFloat(row.Debit || 0);
+              const credit = parseFloat(row.Credit || 0);
+              const acc = String(row.Account_Code);
+
+              // Revenue (4-xxxx) -> Kredit nambah, Debit kurang (retur)
+              if (acc.startsWith('4')) revenue += (credit - debit);
+              // HPP (5-xxxx) -> Debit nambah
+              if (acc.startsWith('5')) cogs += (debit - credit);
+              // Expense (6-xxxx) -> Debit nambah
+              if (acc.startsWith('6')) opex += (debit - credit);
           }
       });
 
-      // 2. Mutasi Server (Trx Payment)
-      sheetPayments.forEach((p: any) => {
-          const amount = parseFloat(p.Amount || 0);
-          if (String(p.Account_Code).startsWith('1-10')) {
-              if (p.Payment_Type === 'IN') totalCash += amount;
-              else if (p.Payment_Type === 'OUT') totalCash -= amount;
+      // B. PROSES DATA LOKAL (YANG BELUM SYNC)
+      // Agar dashboard tetap Real-time meskipun Trigger belum jalan
+      localPosTrx.forEach((t: any) => {
+          // Cek apakah ID transaksi ini SUDAH ada di GL Cloud?
+          // Jika sudah ada (Ref_ID ketemu), JANGAN hitung lagi (Double Counting Protection)
+          const isSynced = sheetGl.some((g: any) => g.Ref_ID === t.id);
+
+          if (!isSynced) {
+              // Jika belum sync, hitung manual simulasi jurnal
+              if (t.paymentMethod === 'Cash') {
+                  cashOnHand += (t.total || 0); // Simulasi Debit Kas
+              }
+              
+              if (isWithinRange(t.date)) {
+                  revenue += (t.total || 0); // Simulasi Kredit Revenue
+                  
+                  // Simulasi HPP Lokal
+                  let localHpp = 0;
+                  t.items?.forEach((item: any) => {
+                      const prod = sheetProducts.find((p:any) => p.SKU === item.sku);
+                      localHpp += (item.qty * parseFloat(prod?.Std_Cost_Budget || 0));
+                  });
+                  cogs += localHpp; // Simulasi Debit HPP
+              }
           }
       });
 
-      // 3. Mutasi Server (Expense - asumsi mengurangi Kas/Bank)
-      sheetExpense.forEach((e: any) => {
-          totalCash -= parseFloat(e.Amount || 0);
-      });
+      return { revenue, cogs, opex, cashOnHand };
+  }, [sheetGl, localPosTrx, dateRange, sheetProducts]);
 
-      // 4. Mutasi LOKAL (Jurnal GL dari POS)
-      // Ini membaca 'METALURGI_GL_JOURNALS' yang baru saja kita perbaiki
-      localGlJournals.forEach((j: any) => {
-          const debitCode = String(j.debit_acc);
-          const creditCode = String(j.credit_acc);
-          const amount = parseFloat(j.amount || 0);
-
-          if (debitCode.startsWith('1-10')) totalCash += amount; // Uang Masuk
-          if (creditCode.startsWith('1-10')) totalCash -= amount; // Uang Keluar
-      });
-
-      return totalCash;
-  }, [sheetCoa, sheetPayments, sheetExpense, localGlJournals]);
+  const REAL_REVENUE = FINANCIALS.revenue;
+  const REAL_HPP = FINANCIALS.cogs;
+  const REAL_GROSS_PROFIT = REAL_REVENUE - REAL_HPP;
+  const REAL_OPEX = FINANCIALS.opex;
+  const REAL_NET_PROFIT = REAL_GROSS_PROFIT - REAL_OPEX;
+  const CASH_ON_HAND = FINANCIALS.cashOnHand;
 
 
   // =================================================================================
-  // ⚡ CORE LOGIC: REVENUE & COST (HYBRID CALCULATION)
+  // ⚡ CORE LOGIC 2: PRODUCT & COST ANALYTICS (SUMBER: TRX_POS & TRX_EXPENSE)
+  // General Ledger tidak punya nama produk, jadi kita ambil detail dari Sheet Transaksi
   // =================================================================================
 
-  const hybridStats = useMemo(() => {
+  const ANALYTICS = useMemo(() => {
     const productMap: Record<string, { name: string, value: number, count: number, sku: string }> = {};
     const costMap: Record<string, { name: string, value: number, category: string, division: string }> = {};
     
-    let revenue = 0;
-    let cogs = 0;
-    let opex = 0;
-    
-    // --- 1. PROSES SALES SHEET (SERVER) ---
-    sheetSales.filter((r:any) => isWithinRange(r.Trx_Date)).forEach((r:any) => {
-        const val = (parseFloat(r.Qty||0) * parseFloat(r.Unit_Price||0));
-        revenue += val;
-        
-        // Mapping Top Sales
-        if (!productMap[r.Product_SKU]) productMap[r.Product_SKU] = { name: r.Product_Name, value: 0, count: 0, sku: r.Product_SKU };
-        productMap[r.Product_SKU].value += val;
-        productMap[r.Product_SKU].count += 1;
-
-        // Costing Server
-        const prod = sheetProducts.find((p:any) => p.SKU === r.Product_SKU);
-        cogs += (parseFloat(r.Qty||0) * parseFloat(prod?.Std_Cost_Budget||0));
+    // 1. TOP SALES (Gabungan Cloud Trx_POS + Local POS)
+    // Cloud
+    sheetPosTrx.filter((r:any) => isWithinRange(r.Date)).forEach((r:any) => {
+        try {
+            const items = JSON.parse(r.Items_Json || '[]');
+            items.forEach((item: any) => {
+                if (!productMap[item.sku]) productMap[item.sku] = { name: item.name, value: 0, count: 0, sku: item.sku };
+                productMap[item.sku].value += (item.qty * item.price);
+                productMap[item.sku].count += item.qty;
+            });
+        } catch (e) {}
     });
     
-    // --- 2. PROSES POS SALES (LOCAL) ---
+    // Local (Unsynced Only)
     localPosTrx.filter((t:any) => isWithinRange(t.date)).forEach((t:any) => {
-        revenue += (t.total || 0);
-        
-        t.items.forEach((item:any) => {
-            // Mapping Top Sales
-            if (!productMap[item.sku]) productMap[item.sku] = { name: item.name, value: 0, count: 0, sku: item.sku };
-            productMap[item.sku].value += (item.qty * item.price);
-            productMap[item.sku].count += 1;
-
-            // Costing POS
-            const prod = sheetProducts.find((p:any) => p.SKU === item.sku);
-            cogs += (item.qty * parseFloat(prod?.Std_Cost_Budget||0));
-        });
+        const isSynced = sheetPosTrx.some((row:any) => row.Trx_ID === t.id);
+        if (!isSynced) {
+            t.items.forEach((item: any) => {
+                if (!productMap[item.sku]) productMap[item.sku] = { name: item.name, value: 0, count: 0, sku: item.sku };
+                productMap[item.sku].value += (item.qty * item.price);
+                productMap[item.sku].count += item.qty;
+            });
+        }
     });
 
-    // --- 3. PROSES EXPENSE & PURCHASE (SERVER) ---
-    sheetExpense.filter((r:any) => isWithinRange(r.Trx_Date)).forEach((r:any) => {
+    // 2. TOP COST (Dari Sheet Expense & Purchase)
+    sheetExpense.filter((r:any) => isWithinRange(r.Date)).forEach((r:any) => {
         const val = parseFloat(r.Amount || 0);
-        opex += val;
-        // Mapping Top Cost
         const key = `EXP-${r.Desc}`;
         if (!costMap[key]) costMap[key] = { name: r.Desc, value: 0, category: 'OPEX', division: 'General' };
         costMap[key].value += val;
     });
 
-    sheetPurchases.filter((row: any) => isWithinRange(row.Trx_Date)).forEach((row: any) => {
+    sheetPurchases.filter((row: any) => isWithinRange(row.Date)).forEach((row: any) => {
+      // Perhitungan manual karena Purchase di sheet per item
       const val = parseFloat((row.Qty || '0')) * parseFloat((row.Unit_Cost || '0'));
-      // Mapping Top Cost
       const key = `PUR-${row.Product_SKU}`;
-      if (!costMap[key]) costMap[key] = { name: `Beli ${row.Product_Name}`, value: 0, category: 'COGS', division: 'Inventory' };
+      if (!costMap[key]) costMap[key] = { name: `Stok ${row.Product_SKU}`, value: 0, category: 'COGS', division: 'Inventory' };
       costMap[key].value += val;
     });
 
     return { 
-        revenue, cogs, opex,
         salesList: Object.values(productMap).sort((a,b) => b.value - a.value),
         costList: Object.values(costMap).sort((a,b) => b.value - a.value)
     };
-  }, [sheetSales, localPosTrx, sheetExpense, sheetProducts, sheetPurchases, dateRange]);
+  }, [sheetPosTrx, localPosTrx, sheetExpense, sheetPurchases, dateRange]);
 
-  const REAL_REVENUE = hybridStats.revenue;
-  const REAL_HPP = hybridStats.cogs;
-  const REAL_GROSS_PROFIT = REAL_REVENUE - REAL_HPP;
-  const REAL_OPEX = hybridStats.opex;
-  const REAL_NET_PROFIT = REAL_GROSS_PROFIT - REAL_OPEX;
 
-  // Inventory Value (Asset)
+  // =================================================================================
+  // ⚡ CORE LOGIC 3: INVENTORY ASSET
+  // =================================================================================
   const INVENTORY_VALUE = useMemo(() => {
-      // 1. Initial
+      // 1. Initial Stock Value
       let val = sheetProducts.reduce((acc, p:any) => acc + (parseFloat(p.Initial_Stock||0) * parseFloat(p.Std_Cost_Budget||0)), 0);
-      // 2. Plus Purchase (All Time)
-      val += sheetPurchases.reduce((acc, p:any) => acc + (parseFloat(p.Qty||0) * parseFloat(p.Unit_Cost||0)), 0);
-      // 3. Minus COGS Out (From Local GL - Kredit akun 1-13xx)
-      const cogsOut = localGlJournals
-          .filter(j => j.credit_acc && String(j.credit_acc).startsWith('1-13')) 
-          .reduce((acc, j) => acc + (j.amount || 0), 0);
-      return val - cogsOut;
-  }, [sheetProducts, sheetPurchases, localGlJournals]);
+      
+      // 2. Tambah Pembelian (Debit 1-1003 di GL)
+      // 3. Kurang HPP/Terjual (Kredit 1-1003 di GL)
+      sheetGl.forEach((j: any) => {
+          if (String(j.Account_Code).startsWith('1-1003')) { // Akun Persediaan
+             val += (parseFloat(j.Debit || 0) - parseFloat(j.Credit || 0));
+          }
+      });
+      return val;
+  }, [sheetProducts, sheetGl]);
+
 
   const MONTHLY_BURN_RATE = REAL_OPEX + REAL_HPP; 
   const RUNWAY_MONTHS = MONTHLY_BURN_RATE > 0 ? (CASH_ON_HAND / MONTHLY_BURN_RATE).toFixed(1) : "N/A";
-
-  // Flowchart Data (FORMAT UI ASLI)
-  const PNL_DETAILED = {
-      revenue: formatCurrency(REAL_REVENUE),
-      cogs: formatCurrency(REAL_HPP),
-      gp: formatCurrency(REAL_GROSS_PROFIT),
-      opex: formatCurrency(REAL_OPEX),
-      net: formatCurrency(REAL_NET_PROFIT)
-  };
 
   const CASHFLOW_DATA = {
     operating: { in: REAL_REVENUE, out: (REAL_HPP + REAL_OPEX), net: REAL_NET_PROFIT },
@@ -248,19 +253,8 @@ export default function Dashboard() {
     financing: { in: 0, out: 0, net: 0 },
   };
 
-  // POS Analytics Helper
-  const posAnalytics = useMemo(() => {
-    const total = localPosTrx.reduce((acc, t) => acc + (t.total || 0), 0);
-    const products: any[] = [];
-    localPosTrx.forEach(t => {
-       t.items.forEach((item: any) => {
-          const exists = products.find(p => p.sku === item.sku);
-          if (exists) { exists.qty += item.qty; exists.revenue += (item.qty * item.price); }
-          else { products.push({ ...item, revenue: item.qty * item.price }); }
-       });
-    });
-    return { totalRevenue: total, products: products.sort((a,b)=>b.revenue-a.revenue).slice(0, 10) };
-  }, [localPosTrx]);
+  // Helper untuk POS Analytics Table (Total di Widget Bawah)
+  const posTotalRevenue = ANALYTICS.salesList.reduce((acc, item) => acc + item.value, 0);
 
 
   if (!isClient) return null;
@@ -301,7 +295,7 @@ export default function Dashboard() {
           <p className="text-slate-500 text-xs font-medium uppercase">Inventory Value</p><p className="text-2xl font-bold text-slate-900">{formatCurrency(INVENTORY_VALUE)}</p>
         </div>
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-all">
-          <div className="flex justify-between items-start mb-2"><div className="p-2 bg-blue-100 text-blue-600 rounded-lg"><AlertCircle size={20}/></div><span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-bold">+8%</span></div>
+          <div className="flex justify-between items-start mb-2"><div className="p-2 bg-blue-100 text-blue-600 rounded-lg"><AlertCircle size={20}/></div><span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-bold">+GL</span></div>
           <p className="text-slate-500 text-xs font-medium uppercase">Total Revenue</p><p className="text-2xl font-bold text-slate-900">{formatCurrency(REAL_REVENUE)}</p>
         </div>
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-all">
@@ -341,16 +335,16 @@ export default function Dashboard() {
           <div className="flex-1 flex flex-col justify-between relative space-y-3">
             <div className="absolute left-4 top-4 bottom-8 w-0.5 bg-slate-100 -z-0"></div>
             <div className="flex items-center justify-between z-10 bg-white py-1">
-              <div className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 border-4 border-white"><DollarSign size={14} /></div><div><p className="text-xs text-slate-400 font-bold uppercase">Revenue</p><p className="text-sm font-bold text-slate-800">{formatCurrency(hybridStats.revenue)}</p></div></div>
+              <div className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 border-4 border-white"><DollarSign size={14} /></div><div><p className="text-xs text-slate-400 font-bold uppercase">Revenue (GL)</p><p className="text-sm font-bold text-slate-800">{formatCurrency(REAL_REVENUE)}</p></div></div>
             </div>
             <div className="flex items-center justify-between z-10 bg-white py-1 pl-4">
-              <div className="flex items-center gap-3"><div className="w-2 h-2 rounded-full bg-rose-400 border-2 border-white ring-1 ring-rose-100"></div><div><p className="text-[10px] text-rose-500 font-bold uppercase">(-) HPP / COGS</p><p className="text-xs font-semibold text-rose-700">{formatCurrency(hybridStats.cogs)}</p></div></div>
+              <div className="flex items-center gap-3"><div className="w-2 h-2 rounded-full bg-rose-400 border-2 border-white ring-1 ring-rose-100"></div><div><p className="text-[10px] text-rose-500 font-bold uppercase">(-) HPP (GL)</p><p className="text-xs font-semibold text-rose-700">{formatCurrency(REAL_HPP)}</p></div></div>
             </div>
             <div className="flex items-center justify-between z-10 bg-white py-1 pl-4">
-              <div className="flex items-center gap-3"><div className="w-2 h-2 rounded-full bg-emerald-400 border-2 border-white ring-1 ring-emerald-100"></div><div><p className="text-[10px] text-emerald-600 font-bold uppercase">Gross Profit</p><p className="text-xs font-semibold text-emerald-700">{formatCurrency(hybridStats.revenue - hybridStats.cogs)}</p></div></div>
+              <div className="flex items-center gap-3"><div className="w-2 h-2 rounded-full bg-emerald-400 border-2 border-white ring-1 ring-emerald-100"></div><div><p className="text-[10px] text-emerald-600 font-bold uppercase">Gross Profit</p><p className="text-xs font-semibold text-emerald-700">{formatCurrency(REAL_GROSS_PROFIT)}</p></div></div>
             </div>
             <div className="flex items-center justify-between z-10 bg-white py-1 pl-4">
-              <div className="flex items-center gap-3"><div className="w-2 h-2 rounded-full bg-amber-400 border-2 border-white ring-1 ring-amber-100"></div><div><p className="text-[10px] text-amber-500 font-bold uppercase">(-) OPEX</p><p className="text-xs font-semibold text-amber-700">{formatCurrency(hybridStats.opex)}</p></div></div>
+              <div className="flex items-center gap-3"><div className="w-2 h-2 rounded-full bg-amber-400 border-2 border-white ring-1 ring-amber-100"></div><div><p className="text-[10px] text-amber-500 font-bold uppercase">(-) OPEX (GL)</p><p className="text-xs font-semibold text-amber-700">{formatCurrency(REAL_OPEX)}</p></div></div>
             </div>
             <div className="mt-2 p-3 bg-slate-900 rounded-xl text-white z-10 relative shadow-lg">
               <div className="flex justify-between items-center"><div><p className="text-[10px] text-slate-400 font-bold uppercase">Net Profit</p><p className="text-xl font-bold text-white">{formatCurrency(REAL_NET_PROFIT)}</p></div></div>
@@ -516,11 +510,11 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {(topPerfTab === 'sales' ? hybridStats.salesList : hybridStats.costList).length === 0 ? (
+                {(topPerfTab === 'sales' ? ANALYTICS.salesList : ANALYTICS.costList).length === 0 ? (
                     <tr><td colSpan={6} className="p-8 text-center text-sm text-slate-400">Belum ada data transaksi.</td></tr>
                 ) : (
-                    (topPerfTab === 'sales' ? hybridStats.salesList : hybridStats.costList).slice(0, topCount).map((item:any, idx:number) => {
-                    const totalBase = topPerfTab === 'sales' ? hybridStats.revenue : (hybridStats.opex);
+                    (topPerfTab === 'sales' ? ANALYTICS.salesList : ANALYTICS.costList).slice(0, topCount).map((item:any, idx:number) => {
+                    const totalBase = topPerfTab === 'sales' ? posTotalRevenue : (REAL_OPEX + REAL_HPP); // Comparison Base
                     const percent = totalBase > 0 ? ((item.value / totalBase) * 100).toFixed(1) : 0;
                     return (
                       <tr key={idx} className="hover:bg-slate-50 transition-colors text-sm">
@@ -561,7 +555,7 @@ export default function Dashboard() {
           </div>
           <div className="text-right">
             <p className="text-xs text-slate-400 font-bold uppercase mb-1">Total POS Revenue</p>
-            <p className="text-3xl font-bold text-blue-700">{formatCurrency(posAnalytics.totalRevenue)}</p>
+            <p className="text-3xl font-bold text-blue-700">{formatCurrency(posTotalRevenue)}</p>
           </div>
         </div>
 
@@ -578,19 +572,19 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {posAnalytics.products.length === 0 ? (
+              {ANALYTICS.salesList.length === 0 ? (
                 <tr><td colSpan={6} className="p-8 text-center text-slate-400 text-sm">Belum ada data transaksi POS pada periode ini.</td></tr>
               ) : (
-                posAnalytics.products.map((item, idx) => (
+                ANALYTICS.salesList.slice(0, 10).map((item, idx) => (
                   <tr key={idx} className="hover:bg-blue-50/50 transition-colors text-sm">
                     <td className="p-4 text-slate-400 font-mono text-xs">#{idx + 1}</td>
                     <td className="p-4 font-bold text-slate-700">{item.name}</td>
-                    <td className="p-4 text-center"><span className="bg-slate-100 text-slate-700 px-2 py-1 rounded-lg font-bold text-xs">{item.qty}</span></td>
-                    <td className="p-4 text-right text-xs text-slate-500 font-mono">{formatCurrency(Math.round(item.revenue / item.qty))}</td>
-                    <td className="p-4 text-right font-bold text-emerald-600">{formatCurrency(item.revenue)}</td>
+                    <td className="p-4 text-center"><span className="bg-slate-100 text-slate-700 px-2 py-1 rounded-lg font-bold text-xs">{item.count}</span></td>
+                    <td className="p-4 text-right text-xs text-slate-500 font-mono">{formatCurrency(Math.round(item.value / item.count))}</td>
+                    <td className="p-4 text-right font-bold text-emerald-600">{formatCurrency(item.value)}</td>
                     <td className="p-4 text-right">
                       <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded">
-                        {posAnalytics.totalRevenue > 0 ? ((item.revenue / posAnalytics.totalRevenue) * 100).toFixed(1) : 0}%
+                        {posTotalRevenue > 0 ? ((item.value / posTotalRevenue) * 100).toFixed(1) : 0}%
                       </span>
                     </td>
                   </tr>

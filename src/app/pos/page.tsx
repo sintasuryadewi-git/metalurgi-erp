@@ -6,14 +6,27 @@ import {
   Store, LogOut, Printer, X, Loader2,
   User, Clock, Calendar, CheckCircle2,
   FileDown, ClipboardList, Box, CloudUpload, RefreshCw, Database, Laptop2, Eraser, UploadCloud, ImageIcon,
-  ChevronLeft, ChevronRight // Icon untuk Pagination
+  ChevronLeft, ChevronRight,
+  Smartphone, BarChart3, ShieldAlert, CheckCircle, PieChart 
 } from 'lucide-react';
 
 import { useFetch } from '@/hooks/useFetch'; 
 
+// --- KONSTANTA KOMISI MARKETPLACE ---
+const MARKETPLACE_COMMISSION = {
+    ShopeeFood: 0.42, // 42%
+    GrabFood: 0.26,   // 26%
+    GoFood: 0.22,     // 22%
+    Cash: 0,
+    QRIS: 0,
+    Transfer: 0
+};
+
+type PaymentMethodType = 'Cash' | 'QRIS' | 'Transfer' | 'ShopeeFood' | 'GrabFood' | 'GoFood';
+
 export default function PosPage() {
   // --- STATE CORE ---
-  const [activeView, setActiveView] = useState<'cashier' | 'transactions' | 'shifts'>('cashier');
+  const [activeView, setActiveView] = useState<'cashier' | 'transactions' | 'shifts' | 'analysis'>('cashier');
   const [products, setProducts] = useState<any[]>([]);
   const [cart, setCart] = useState<any[]>([]);
   
@@ -22,16 +35,21 @@ export default function PosPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // --- STATE CLOUD DASHBOARD ---
+  // --- STATE CLOUD DASHBOARD & GL AUDIT ---
   const [viewSource, setViewSource] = useState<'local' | 'cloud'>('local');
   const [cloudTransactions, setCloudTransactions] = useState<any[]>([]);
   const [isLoadingCloud, setIsLoadingCloud] = useState(false);
+  
+  // State for GL Audit
+  const [isAuditingGL, setIsAuditingGL] = useState(false);
+  const [unsyncedGLIds, setUnsyncedGLIds] = useState<string[]>([]);
+  const [auditDone, setAuditDone] = useState(false);
 
   // --- STATE MASTERS ---
   const [masterCashiers, setMasterCashiers] = useState<any[]>([]);
   const [masterShifts, setMasterShifts] = useState<any[]>([]);
   
-  // STATE CONFIG STRUK (Dari API)
+  // STATE CONFIG STRUK
   const [receiptConfig, setReceiptConfig] = useState<any>({
       Store_Name: 'METALURGI POS',
       Address: '',
@@ -66,7 +84,7 @@ export default function PosPage() {
   const [showSuccessModal, setShowSuccessModal] = useState(false); 
   const [showReceiptPreview, setShowReceiptPreview] = useState(false); 
   
-  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'QRIS' | 'Transfer'>('Cash');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>('Cash');
   const [amountPaid, setAmountPaid] = useState<number>(0);
   const [currentTrx, setCurrentTrx] = useState<any>(null); 
 
@@ -80,7 +98,7 @@ export default function PosPage() {
   const [historySearch, setHistorySearch] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'timestamp', direction: 'desc' });
 
-  // [NEW] STATE PAGINATION
+  // STATE PAGINATION
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
@@ -90,10 +108,12 @@ export default function PosPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
 
-  // --- DATA FETCHING ---
+  // --- [MODIFIED] DATA FETCHING ---
+  // Kita menggunakan hook useFetch bawaan untuk memastikan token/identitas terkirim
   const { data: apiData, loading } = useFetch<any>('/api/pos');
+  // Memuat data GL di latar belakang menggunakan jalur yang sudah teruji keamanannya
+  const { data: glApiData } = useFetch<any>('/api/general-ledger');
 
-  // --- DATA PARSER ---
   const processSheetData = (rows: any[]) => {
       if (!rows || rows.length < 2) return [];
       const headers = rows[0].map((h: string) => h.trim()); 
@@ -106,24 +126,19 @@ export default function PosPage() {
       });
   };
 
-  // --- LOAD & PROCESS DATA ---
   useEffect(() => {
     if (typeof window !== 'undefined') {
         const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
         if (savedLogo) setLogoPreview(savedLogo);
 
-        // Load Receipt Config Backup
         const savedMasters = localStorage.getItem('METALURGI_POS_MASTERS');
         if (savedMasters) {
             try {
                 const parsedMasters = JSON.parse(savedMasters);
-                if (parsedMasters.receipt) {
-                    setReceiptConfig(parsedMasters.receipt);
-                }
-            } catch (e) { console.error("Gagal load config struk", e); }
+                if (parsedMasters.receipt) setReceiptConfig(parsedMasters.receipt);
+            } catch (e) { }
         }
 
-        // Load Owner Email
         const directEmail = localStorage.getItem('METALURGI_USER_EMAIL');
         if (directEmail) {
             setOwnerEmail(directEmail);
@@ -173,10 +188,7 @@ export default function PosPage() {
         const users = processSheetData(apiData.users); 
         const shifts = processSheetData(apiData.shifts); 
 
-        // Load Config Struk dari API
-        if (apiData.receipt) {
-            setReceiptConfig(apiData.receipt);
-        }
+        if (apiData.receipt) setReceiptConfig(apiData.receipt);
 
         setProducts(rawProducts);
         
@@ -199,14 +211,12 @@ export default function PosPage() {
              }
         });
         setCalculatedStockMap(stockMap); 
-    } catch (err) {
-        console.error("POS Data Error", err);
-    }
+    } catch (err) {}
   }, [apiData]);
 
-  // --- HELPER & LOGIC ---
+  // --- HELPER ---
   const fmtMoney = (n: any) => {
-    const num = Number(n) || 0; // Jika n kosong/undefined, otomatis jadi 0
+    const num = Number(n) || 0; 
     return "Rp " + num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   };
   
@@ -223,32 +233,64 @@ export default function PosPage() {
       return Math.max(0, sheetStock - soldLocally - inCart);
   };
 
-  // --- FETCH CLOUD DATA ---
   const fetchCloudData = async () => {
-    if (!ownerEmail) return alert("Sesi Owner tidak terdeteksi. Silakan Login ulang di halaman utama.");
-    
+    if (!ownerEmail) return alert("Sesi Owner tidak terdeteksi.");
     setIsLoadingCloud(true);
+    setAuditDone(false); 
     try {
-      // Ambil data Cloud (Biasanya semua data, nanti difilter di frontend)
       const res = await fetch(`/api/pos/report?email=${ownerEmail}`);
       const json = await res.json();
-      if (json.success) {
-        setCloudTransactions(json.data);
-      } else {
-        alert("Gagal mengambil data Cloud: " + json.error);
-      }
-    } catch (err) {
-      alert("Koneksi gagal.");
-    } finally {
-      setIsLoadingCloud(false);
-    }
+      if (json.success) setCloudTransactions(json.data);
+      else alert("Gagal Cloud: " + json.error);
+    } catch (err) { alert("Koneksi gagal."); } 
+    finally { setIsLoadingCloud(false); }
   };
 
   useEffect(() => {
-    if (viewSource === 'cloud' && activeView === 'transactions') {
-      fetchCloudData();
-    }
+    if (viewSource === 'cloud' && (activeView === 'transactions' || activeView === 'analysis')) fetchCloudData();
   }, [viewSource, activeView]);
+
+  // --- [MODIFIED] GL AUDIT LOGIC (Aman dari Auth Error) ---
+  const runGLAudit = async () => {
+      setIsAuditingGL(true);
+      
+      // Beri jeda UI agar terasa proses sinkronisasinya
+      await new Promise(resolve => setTimeout(resolve, 600));
+
+      try {
+          // Kita baca data GL dari hasil useFetch yang sudah aman di latar belakang
+          if (!glApiData || !glApiData.gl) {
+              alert("Data General Ledger belum siap atau gagal dimuat. Silakan refresh halaman (F5) dan coba lagi.");
+              setIsAuditingGL(false);
+              return;
+          }
+          
+          const glRows = glApiData.gl || [];
+          // Index 6 adalah Ref_ID di General Ledger
+          const glRefIds = new Set(glRows.slice(1).map((r:any) => String(r[6])));
+          
+          const missingIds: string[] = [];
+          cloudTransactions.forEach(trx => {
+              if (!glRefIds.has(trx.id)) {
+                  missingIds.push(trx.id);
+              }
+          });
+          
+          setUnsyncedGLIds(missingIds);
+          setAuditDone(true);
+
+          if (missingIds.length === 0) {
+              alert("✅ Audit Selesai: Semua transaksi Cloud sudah masuk ke General Ledger!");
+          } else {
+              alert(`⚠️ Peringatan: Ditemukan ${missingIds.length} transaksi yang belum masuk ke General Ledger. Silakan cek tabel untuk tracing.`);
+          }
+      } catch (e) {
+          alert("Gagal memproses audit General Ledger.");
+      } finally {
+          setIsAuditingGL(false);
+      }
+  };
+
 
   const filteredHistory = useMemo(() => {
       const sourceData = viewSource === 'local' ? allTransactions : cloudTransactions;
@@ -259,7 +301,6 @@ export default function PosPage() {
       end.setHours(23, 59, 59, 999);
 
       data = data.filter(t => { 
-          // [FIX LOGIC] Pastikan memfilter berdasarkan t.date (Tanggal Transaksi), bukan tanggal shift
           const tDate = new Date(t.date); 
           return tDate >= start && tDate <= end; 
       });
@@ -280,41 +321,89 @@ export default function PosPage() {
       return data;
   }, [allTransactions, cloudTransactions, viewSource, dateRange, shiftFilter, historySearch, sortConfig]);
 
-  // [NEW] PAGINATION LOGIC
   const paginatedHistory = useMemo(() => {
       const startIndex = (currentPage - 1) * itemsPerPage;
       return filteredHistory.slice(startIndex, startIndex + itemsPerPage);
   }, [filteredHistory, currentPage]);
-
   const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
 
-  // --- SYNC LOGIC ---
+  // --- LOGIC: POS ANALYSIS ---
+  const analysisData = useMemo(() => {
+      const start = new Date(dateRange.start); start.setHours(0,0,0,0);
+      const end = new Date(dateRange.end); end.setHours(23,59,59,999);
+
+      // 1. RECONCILIATION: Local vs Cloud Data
+      const methods = ['Cash', 'QRIS', 'Transfer', 'ShopeeFood', 'GrabFood', 'GoFood'];
+      const reconcileStats: any[] = [];
+      let totalLocal = 0;
+      let totalCloud = 0;
+
+      const locTrx = allTransactions.filter(t => new Date(t.date) >= start && new Date(t.date) <= end);
+      const cldTrx = cloudTransactions.filter(t => new Date(t.date) >= start && new Date(t.date) <= end);
+
+      methods.forEach(m => {
+          const l = locTrx.filter(t => t.paymentMethod === m).reduce((a,b) => a + (b.total||0), 0);
+          const c = cldTrx.filter(t => t.paymentMethod === m).reduce((a,b) => a + (b.total||0), 0);
+          
+          if (l > 0 || c > 0) {
+              reconcileStats.push({ method: m, local: l, cloud: c, variance: l - c });
+          }
+          totalLocal += l;
+          totalCloud += c;
+      });
+
+      // 2. SKU PERFORMANCE
+      const skuStats: Record<string, { name: string, qty: number, total: number }> = {};
+      const activeTrx = viewSource === 'local' ? locTrx : cldTrx;
+      
+      activeTrx.forEach(trx => {
+          trx.items.forEach((item: any) => {
+              if (!skuStats[item.sku]) skuStats[item.sku] = { name: item.name, qty: 0, total: 0 };
+              skuStats[item.sku].qty += item.qty;
+              skuStats[item.sku].total += (item.qty * item.price);
+          });
+      });
+
+      const rankedSKU = Object.values(skuStats)
+          .filter(s => s.qty > 0)
+          .sort((a, b) => b.total - a.total);
+          
+      const grandTotalQty = rankedSKU.reduce((sum, item) => sum + item.qty, 0);
+      const grandTotalAmount = rankedSKU.reduce((sum, item) => sum + item.total, 0);
+
+      // 3. MARKETPLACE EST. PROFIT
+      const cloudShopee = cldTrx.filter(t => t.paymentMethod === 'ShopeeFood').reduce((a,b) => a + (b.total||0), 0);
+      const cloudGrab = cldTrx.filter(t => t.paymentMethod === 'GrabFood').reduce((a,b) => a + (b.total||0), 0);
+      const cloudGoFood = cldTrx.filter(t => t.paymentMethod === 'GoFood').reduce((a,b) => a + (b.total||0), 0);
+
+      const estCommission = {
+          ShopeeFood: cloudShopee * MARKETPLACE_COMMISSION.ShopeeFood,
+          GrabFood: cloudGrab * MARKETPLACE_COMMISSION.GrabFood,
+          GoFood: cloudGoFood * MARKETPLACE_COMMISSION.GoFood,
+          GrossShopee: cloudShopee,
+          GrossGrab: cloudGrab,
+          GrossGoFood: cloudGoFood
+      };
+
+      return { reconcileStats, totalLocal, totalCloud, rankedSKU, grandTotalQty, grandTotalAmount, estCommission };
+  }, [allTransactions, cloudTransactions, dateRange, viewSource]);
+
+
+  // --- SYNC & ACTION LOGIC ---
   const runAutoSync = async (transaction: any) => {
     if (!ownerEmail) return; 
     setIsSyncing(true);
     try {
-       await fetch('/api/pos/sync', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: ownerEmail, transactions: [transaction] })
-       });
-    } catch (err) { console.error("Auto-sync failed:", err); } 
-    finally { setIsSyncing(false); }
+       await fetch('/api/pos/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, transactions: [transaction] }) });
+    } catch (err) {} finally { setIsSyncing(false); }
   };
 
   const handleSyncShifts = async () => {
       if (!ownerEmail) return alert("Sesi Owner tidak valid.");
       if (shiftHistory.length === 0) return alert("Tidak ada data shift.");
-      
       setIsSyncing(true);
       try {
-          const res = await fetch('/api/pos/shift', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                  email: ownerEmail, 
-                  shiftData: shiftHistory 
-              })
-          });
+          const res = await fetch('/api/pos/shift', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, shiftData: shiftHistory }) });
           const json = await res.json();
           if (json.success) alert(`✅ Laporan Shift Terupload!`);
           else alert(`❌ Gagal: ${json.error}`);
@@ -324,12 +413,10 @@ export default function PosPage() {
 
   const handleDeleteTransaction = (id: string) => {
       if(viewSource !== 'local') return alert("Data Cloud tidak bisa dihapus dari sini.");
-      
-      if(confirm("Apakah Anda yakin ingin menghapus transaksi ini? Stok tidak akan dikembalikan otomatis.")) {
+      if(confirm("Hapus transaksi ini? Stok tidak akan dikembalikan otomatis.")) {
           const newTrx = allTransactions.filter(t => t.id !== id);
           setAllTransactions(newTrx);
           localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(newTrx));
-          alert("Transaksi dihapus.");
       }
   };
 
@@ -337,22 +424,17 @@ export default function PosPage() {
       if (viewSource !== 'local') return;
       if (allTransactions.length === 0) return alert("Data kosong.");
       if (confirm("⚠️ Hapus SEMUA riwayat transaksi LOKAL?")) {
-          setAllTransactions([]);
-          localStorage.removeItem('METALURGI_POS_TRX');
-          alert("Reset berhasil.");
+          setAllTransactions([]); localStorage.removeItem('METALURGI_POS_TRX');
       }
   };
 
   const handleResetShifts = () => {
       if (shiftHistory.length === 0) return alert("Data kosong.");
       if(confirm("⚠️ Hapus semua riwayat Shift LOKAL?")) {
-          setShiftHistory([]);
-          localStorage.removeItem('METALURGI_POS_SHIFT_HISTORY');
-          alert("Reset berhasil.");
+          setShiftHistory([]); localStorage.removeItem('METALURGI_POS_SHIFT_HISTORY');
       }
   };
 
-  // --- ACTION HANDLERS ---
   const addToCart = (product: any) => {
      if (!isShiftOpen) { alert("Buka Shift Kasir terlebih dahulu!"); return setShowShiftModal(true); }
      const currentStock = getLiveStock(product);
@@ -385,10 +467,7 @@ export default function PosPage() {
 
       setIsSyncing(true);
       try {
-          const res = await fetch('/api/pos/sync', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: ownerEmail, transactions: trxs })
-          });
+          const res = await fetch('/api/pos/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, transactions: trxs }) });
           const json = await res.json();
           if (json.success) alert(`✅ SUKSES: ${json.message}`);
           else alert(`❌ GAGAL: ${json.error}`);
@@ -403,13 +482,43 @@ export default function PosPage() {
   };
 
   const handleCloseShift = () => {
-     if(!confirm("Proses Tutup Shift?")) return;
+     if(!confirm("Proses Tutup Shift? Pastikan laci kasir sudah dihitung.")) return;
+     
      const shiftTrx = allTransactions.filter(t => t.shiftId === shiftData.id);
-     const cashIn = shiftTrx.filter(t => t.paymentMethod === 'Cash').reduce((acc, t) => acc + t.total, 0);
+     
+     const grossSales = shiftTrx.reduce((acc, t) => acc + (t.total || 0), 0);
+     const totalDiscount = 0; 
+     const totalTax = 0; 
+     const netSales = grossSales - totalDiscount + totalTax;
+
+     let totalItemQty = 0;
+
+     const paymentBreakdown = { Cash: 0, QRIS: 0, Transfer: 0, ShopeeFood: 0, GrabFood: 0, GoFood: 0 };
+     const shiftItemsMap: Record<string, {name: string, qty: number, total: number}> = {};
+
+     shiftTrx.forEach(t => {
+         const method = t.paymentMethod as PaymentMethodType;
+         if (paymentBreakdown[method] !== undefined) paymentBreakdown[method] += (t.total || 0);
+
+         t.items.forEach((item: any) => {
+             totalItemQty += item.qty;
+             if (!shiftItemsMap[item.sku]) shiftItemsMap[item.sku] = { name: item.name, qty: 0, total: 0 };
+             shiftItemsMap[item.sku].qty += item.qty;
+             shiftItemsMap[item.sku].total += (item.qty * item.price);
+         });
+     });
+
+     const shiftItemsArray = Object.values(shiftItemsMap).sort((a,b) => b.total - a.total);
+
+     const cashIn = paymentBreakdown.Cash;
+     const expectedCashEnd = shiftData.startCash + cashIn - cashOutInput;
+     const variance = endCashInput - expectedCashEnd;
+
      const closingData = { 
          ...shiftData, status: 'CLOSED', endTime: new Date().toISOString(), 
-         endCashActual: endCashInput, variance: endCashInput - (shiftData.startCash + cashIn - cashOutInput), note: closingNote,
-         cashIn, cashOut: cashOutInput, changeGiven: 0, expectedCashEnd: 0, totalDiscount: 0, totalNetSales: 0, totalGrossSales: 0, totalTax: 0 
+         grossSales, totalDiscount, totalTax, netSales, totalItemQty,
+         paymentBreakdown, shiftItemsArray, 
+         cashIn, cashOut: cashOutInput, expectedCashEnd, endCashActual: endCashInput, variance, note: closingNote, changeGiven: 0
      };
      
      const history = JSON.parse(localStorage.getItem('METALURGI_POS_SHIFT_HISTORY') || '[]');
@@ -419,13 +528,7 @@ export default function PosPage() {
      localStorage.removeItem('METALURGI_POS_SHIFT');
      
      if (ownerEmail) {
-         fetch('/api/pos/shift', {
-             method: 'POST', headers: { 'Content-Type': 'application/json' },
-             body: JSON.stringify({ email: ownerEmail, shiftData: closingData })
-         }).then(res => res.json()).then(d => {
-             if(d.success) alert("✅ Shift ditutup & tersimpan di Cloud.");
-             else alert("⚠️ Shift ditutup lokal, tapi gagal upload cloud: " + d.error);
-         }).catch(() => alert("⚠️ Shift ditutup lokal (Offline Mode)."));
+         fetch('/api/pos/shift', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, shiftData: closingData }) }).catch(()=>{});
      }
 
      setIsShiftOpen(false); setShiftData({ startTime: null, startCash: 0, totalSales: 0 }); setCart([]); setShowCloseShiftModal(false);
@@ -434,74 +537,98 @@ export default function PosPage() {
 
   const handleProcessPayment = () => {
      if (amountPaid < cartTotal && paymentMethod === 'Cash') return alert("Uang pembayaran kurang!");
-     
-     // [FIX LOGIC TANGGAL LIVE]
-     // Gunakan new Date() saat ini juga sebagai waktu transaksi, jangan ambil dari shift start time
      const liveDate = new Date(); 
-     
      const trx = {
-        id: `POS-${Math.floor(Math.random()*1000000)}`,
-        date: liveDate.toISOString(), // Tanggal Live
-        timestamp: liveDate.toLocaleTimeString(), // Jam Live
-        items: cart, 
-        total: cartTotal, 
-        paymentMethod, 
-        amountPaid, 
-        change: Math.max(0, changeDue), 
-        cashier: shiftData.cashierName, 
-        shift: shiftData.shiftName, 
-        shiftId: shiftData.id, 
-        isPrinted: false
+        id: `POS-${Math.floor(Math.random()*1000000)}`, date: liveDate.toISOString(), timestamp: liveDate.toLocaleTimeString(), 
+        items: cart, total: cartTotal, paymentMethod, 
+        amountPaid: ['QRIS','Transfer','ShopeeFood','GrabFood','GoFood'].includes(paymentMethod) ? cartTotal : amountPaid,
+        change: ['QRIS','Transfer','ShopeeFood','GrabFood','GoFood'].includes(paymentMethod) ? 0 : Math.max(0, changeDue), 
+        cashier: shiftData.cashierName, shift: shiftData.shiftName, shiftId: shiftData.id, isPrinted: false
      };
-
      const newHistory = [trx, ...allTransactions];
      localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(newHistory));
      setAllTransactions(newHistory); 
      const updatedShift = { ...shiftData, totalSales: shiftData.totalSales + cartTotal };
      setShiftData(updatedShift); localStorage.setItem('METALURGI_POS_SHIFT', JSON.stringify(updatedShift));
 
-     generatePOSJournals(trx);
-     updateInventoryStock(trx);
-     
-     // Auto sync memanggil API yang sudah kita update tadi (untuk GL + POS Sheet)
-     runAutoSync(trx);
-
+     generatePOSJournals(trx); updateInventoryStock(trx); runAutoSync(trx);
      setCurrentTrx(trx); setShowPaymentModal(false); setCart([]); setShowSuccessModal(true);
   };
 
-  const generatePOSJournals = (trx: any) => { try { const journals: any[] = []; const debitAcc = trx.paymentMethod === 'Cash' ? '1-1001' : '1-1002'; const dateStr = trx.date.split('T')[0]; journals.push({ source: 'POS', id: `JNL-${trx.id}-SALES`, date: dateStr, ref: trx.id, desc: `Penjualan POS - ${trx.items.length} Items`, debit_acc: debitAcc, credit_acc: '4-1001', amount: trx.total }); trx.items.forEach((item: any) => { const prod = products.find(p => p.SKU === item.sku); const cost = parseInt(prod?.Std_Cost_Budget || '0'); if (cost > 0) { journals.push({ source: 'POS', id: `JNL-${trx.id}-COGS-${item.sku}`, date: dateStr, ref: trx.id, desc: `HPP - ${item.name}`, debit_acc: '5-1000', credit_acc: '1-1300', amount: cost * item.qty }); } }); const existingRaw = localStorage.getItem('METALURGI_GL_JOURNALS'); let existingGL = existingRaw ? JSON.parse(existingRaw) : []; if (!Array.isArray(existingGL)) existingGL = []; localStorage.setItem('METALURGI_GL_JOURNALS', JSON.stringify([...existingGL, ...journals])); } catch (err) { console.error("Gagal generate jurnal POS:", err); } };
+  const generatePOSJournals = (trx: any) => { 
+      try { 
+          const journals: any[] = []; 
+          let debitAcc = '1-1001'; 
+          if (trx.paymentMethod === 'QRIS') debitAcc = '1-1201'; 
+          else if (trx.paymentMethod === 'ShopeeFood') debitAcc = '1-1202';
+          else if (trx.paymentMethod === 'GoFood') debitAcc = '1-1203';
+          else if (trx.paymentMethod === 'GrabFood') debitAcc = '1-1204';
+          else if (trx.paymentMethod === 'Transfer') debitAcc = '1-1002'; 
+
+          const dateStr = trx.date.split('T')[0]; 
+          journals.push({ source: 'POS', id: `JNL-${trx.id}-SALES`, date: dateStr, ref: trx.id, desc: `Penjualan POS - ${trx.paymentMethod}`, debit_acc: debitAcc, credit_acc: '4-1000', amount: trx.total }); 
+          trx.items.forEach((item: any) => { 
+              const prod = products.find(p => p.SKU === item.sku); 
+              const cost = parseInt(prod?.Std_Cost_Budget || '0'); 
+              if (cost > 0) journals.push({ source: 'POS', id: `JNL-${trx.id}-COGS-${item.sku}`, date: dateStr, ref: trx.id, desc: `HPP - ${item.name}`, debit_acc: '5-1000', credit_acc: '1-1003', amount: cost * item.qty }); 
+          }); 
+          const existingRaw = localStorage.getItem('METALURGI_GL_JOURNALS'); 
+          let existingGL = existingRaw ? JSON.parse(existingRaw) : []; 
+          if (!Array.isArray(existingGL)) existingGL = []; 
+          localStorage.setItem('METALURGI_GL_JOURNALS', JSON.stringify([...existingGL, ...journals])); 
+      } catch (err) {} 
+  };
+  
   const updateInventoryStock = (trx: any) => { const dateStr = trx.date.split('T')[0]; const moves = trx.items.map((item: any) => ({ id: `MOV-POS-${trx.id}-${item.sku}`, date: dateStr, type: 'OUT', sku: item.sku, qty: item.qty, cost: 0, ref: trx.id })); const existingMoves = JSON.parse(localStorage.getItem('METALURGI_INVENTORY_MOVEMENTS') || '[]'); const newMoves = [...existingMoves, ...moves]; localStorage.setItem('METALURGI_INVENTORY_MOVEMENTS', JSON.stringify(newMoves)); const newSoldMap = { ...localSoldQtyMap }; moves.forEach((m: any) => { newSoldMap[m.sku] = (newSoldMap[m.sku] || 0) + m.qty; }); setLocalSoldQtyMap(newSoldMap); };
   const handlePrintReceipt = () => { if(!currentTrx) return; const allTrx = JSON.parse(localStorage.getItem('METALURGI_POS_TRX') || '[]'); const updatedTrx = allTrx.map((t:any) => t.id === currentTrx.id ? { ...t, isPrinted: true } : t); localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(updatedTrx)); setAllTransactions(updatedTrx); setShowSuccessModal(false); setPrintType('receipt'); setShowReceiptPreview(true); };
 
   const categories = ['All', ...Array.from(new Set(products.map(p => p.Category)))];
   const filteredProducts = products.filter(p => (activeCategory === 'All' || p.Category === activeCategory) && (p.Product_Name.toLowerCase().includes(searchTerm.toLowerCase()) || p.SKU.toLowerCase().includes(searchTerm.toLowerCase())));
 
-  // --- TEMPLATES ---
+  // --- TEMPLATE STRUK CETAK ---
   const ShiftReportTemplate = ({ data }: { data: any }) => (
       <>
          <div className="text-center mb-3">
              {logoPreview && <img src={logoPreview} alt="Logo" className="h-10 mx-auto mb-1 object-contain"/>}
              <h2 className="font-bold text-sm uppercase">{receiptConfig.Store_Name || 'Metalurgi POS'}</h2>
-             <div className="text-[9px] font-bold border border-black px-1 inline-block mt-1">LAPORAN TUTUP SHIFT</div>
+             <div className="text-[9px] font-bold border border-black px-1 inline-block mt-1">OBJECTIVE SHIFT REPORT</div>
          </div>
          <div className="grid grid-cols-2 gap-y-1 mb-2 text-[9px]">
              <span>ID Sesi:</span><span className="text-right font-mono">{data.id}</span>
              <span>Tanggal:</span><span className="text-right">{new Date(data.startTime).toLocaleDateString()}</span>
              <span>Shift / Kasir:</span><span className="text-right">{data.shiftName} / {data.cashierName}</span>
-             <span>Waktu Buka:</span><span className="text-right">{new Date(data.startTime).toLocaleTimeString()}</span>
-             <span>Waktu Tutup:</span><span className="text-right">{new Date(data.endTime).toLocaleTimeString()}</span>
          </div>
-         <div className="border-t border-black border-dashed pt-1 mb-1 font-bold text-[9px] uppercase">Arus Kas Tunai</div>
+         
+         <div className="border-t border-black border-dashed pt-1 mb-1 font-bold text-[9px] uppercase">A. Sales Performance</div>
          <div className="grid grid-cols-2 gap-y-1 mb-2 text-[9px]">
-             <span>Saldo Awal:</span><span className="text-right">{fmtMoney(data.startCash)}</span>
-             <span>(+) Penjualan Tunai:</span><span className="text-right">{fmtMoney(data.cashIn)}</span>
-             <span>(-) Cash Out (Keluar):</span><span className="text-right">{fmtMoney(data.cashOut)}</span>
-             <span className="text-slate-500 italic">(-) Info Kembalian:</span><span className="text-right text-slate-500 italic">{fmtMoney(data.changeGiven)}</span>
-             <div className="border-t border-black border-dashed col-span-2 my-1"></div>
-             <span className="font-bold">Saldo Akhir (Sistem):</span><span className="text-right font-bold">{fmtMoney(data.expectedCashEnd)}</span>
-             <span className="font-bold">Saldo Fisik (Aktual):</span><span className="text-right font-bold">{fmtMoney(data.endCashActual)}</span>
-             <span className="font-bold">Selisih (Var):</span><span className="text-right font-bold">{fmtMoney(data.variance)}</span>
+             <span>Total Item (Qty):</span><span className="text-right font-bold">{data.totalItemQty} Item</span>
+             <span>Gross Sales:</span><span className="text-right">{fmtMoney(data.grossSales)}</span>
+             <span>Discount:</span><span className="text-right">{fmtMoney(data.totalDiscount)}</span>
+             <span>Tax:</span><span className="text-right">{fmtMoney(data.totalTax)}</span>
+             <span className="font-bold border-t border-black border-dashed pt-0.5">Net Sales:</span>
+             <span className="text-right font-bold border-t border-black border-dashed pt-0.5">{fmtMoney(data.netSales)}</span>
          </div>
+
+         <div className="border-t border-black border-dashed pt-1 mb-1 font-bold text-[9px] uppercase">B. Payment Breakdown</div>
+         <div className="grid grid-cols-2 gap-y-1 mb-2 text-[9px]">
+             <span>Cash:</span><span className="text-right">{fmtMoney(data.paymentBreakdown?.Cash || 0)}</span>
+             <span>QRIS:</span><span className="text-right">{fmtMoney(data.paymentBreakdown?.QRIS || 0)}</span>
+             <span>Transfer Bank:</span><span className="text-right">{fmtMoney(data.paymentBreakdown?.Transfer || 0)}</span>
+             <span>ShopeeFood:</span><span className="text-right">{fmtMoney(data.paymentBreakdown?.ShopeeFood || 0)}</span>
+             <span>GrabFood:</span><span className="text-right">{fmtMoney(data.paymentBreakdown?.GrabFood || 0)}</span>
+             <span>GoFood:</span><span className="text-right">{fmtMoney(data.paymentBreakdown?.GoFood || 0)}</span>
+         </div>
+
+         <div className="border-t border-black border-dashed pt-1 mb-1 font-bold text-[9px] uppercase">C. Cash Control (Fisik)</div>
+         <div className="grid grid-cols-2 gap-y-1 mb-2 text-[9px]">
+             <span>Start Cash:</span><span className="text-right">{fmtMoney(data.startCash)}</span>
+             <span>(+) Cash In:</span><span className="text-right">{fmtMoney(data.cashIn)}</span>
+             <span>(-) Cash Out:</span><span className="text-right">{fmtMoney(data.cashOut)}</span>
+             <span className="font-bold border-t border-black border-dashed pt-0.5">Expected Cash:</span><span className="text-right font-bold border-t border-black border-dashed pt-0.5">{fmtMoney(data.expectedCashEnd)}</span>
+             <span className="font-bold">Actual Cash:</span><span className="text-right font-bold">{fmtMoney(data.endCashActual)}</span>
+             <span className="font-bold">Variance:</span><span className="text-right font-bold">{fmtMoney(data.variance)}</span>
+         </div>
+
          <div className="mt-6 flex justify-between text-center pt-4 text-[9px]">
              <div className="w-1/3"><p className="mb-8">Dibuat Oleh,</p><p className="border-t border-black pt-1 font-bold">{data.cashierName}</p></div>
              <div className="w-1/3"><p className="mb-8">Diketahui Oleh,</p><p className="border-t border-black pt-1 font-bold">SPV</p></div>
@@ -511,50 +638,68 @@ export default function PosPage() {
 
   const ReceiptTemplate = ({ trx }: { trx: any }) => (
       <>
-         <div className="text-center mb-4">
-             {logoPreview ? (
-                 <img src={logoPreview} alt="Logo" className="h-10 mx-auto mb-2 object-contain"/>
-             ) : (
-                 <div className="mb-2 text-2xl">🏪</div>
-             )}
-             
-             {/* Header Nama Toko */}
-             <h2 className="font-bold text-sm uppercase text-black">
-                 {receiptConfig.Store_Name || 'METALURGI POS'}
-             </h2>
-             
-             {/* Alamat & Telp */}
-             {receiptConfig.Address && <div className="text-[10px] text-slate-600">{receiptConfig.Address}</div>}
-             {receiptConfig.Phone && <div className="text-[10px] text-slate-600">{receiptConfig.Phone}</div>}
-
-             <div className="mt-2 text-left border-t border-black border-dashed pt-2">
-                 <div className="flex justify-between"><span>Trx:</span> <span>{trx.id}</span></div>
-                 <div className="flex justify-between"><span>Date:</span> <span>{trx.date.split('T')[0]} {trx.timestamp}</span></div>
-                 <div className="flex justify-between"><span>Kasir:</span> <span>{trx.cashier}</span></div>
-                 <div className="flex justify-between"><span>Shift:</span> <span>{trx.shift}</span></div>
-                 <div className="flex justify-between"><span>Metode:</span> <span>{trx.paymentMethod}</span></div>
-             </div>
-         </div>
-         <div className="border-b border-black border-dashed mb-2"></div>
-         {trx.items.map((item:any, i:number)=>(<div key={i} className="mb-1"><div>{item.name}</div><div className="flex justify-between"><span>{item.qty} x {fmtMoney(item.price)}</span><span>{fmtMoney(item.qty*item.price)}</span></div></div>))}
-         <div className="border-b border-black border-dashed my-2"></div>
-         <div className="space-y-1">
-             <div className="flex justify-between font-bold text-sm border-t border-black border-dashed pt-1"><span>TOTAL</span><span>{fmtMoney(trx.total)}</span></div>
-             <div className="flex justify-between mt-2"><span>Bayar</span><span>{fmtMoney(trx.amountPaid)}</span></div>
-             <div className="flex justify-between"><span>Kembali</span><span>{fmtMoney(trx.change)}</span></div>
-         </div>
-         <div className="text-center mt-4 text-[10px]">
-             <p>{receiptConfig.Footer || 'Terima Kasih'}</p>
-             {receiptConfig.Instagram && <p className="mt-1 font-bold">{receiptConfig.Instagram}</p>}
-         </div>
+         <div className="text-center mb-4">{logoPreview ? (<img src={logoPreview} alt="Logo" className="h-10 mx-auto mb-2 object-contain"/>) : (<div className="mb-2 text-2xl">🏪</div>)}<h2 className="font-bold text-sm uppercase text-black">{receiptConfig.Store_Name || 'METALURGI POS'}</h2>{receiptConfig.Address && <div className="text-[10px] text-slate-600">{receiptConfig.Address}</div>}{receiptConfig.Phone && <div className="text-[10px] text-slate-600">{receiptConfig.Phone}</div>}<div className="mt-2 text-left border-t border-black border-dashed pt-2"><div className="flex justify-between"><span>Trx:</span> <span>{trx.id}</span></div><div className="flex justify-between"><span>Date:</span> <span>{trx.date.split('T')[0]} {trx.timestamp}</span></div><div className="flex justify-between"><span>Kasir:</span> <span>{trx.cashier}</span></div><div className="flex justify-between"><span>Shift:</span> <span>{trx.shift}</span></div><div className="flex justify-between"><span>Metode:</span> <span>{trx.paymentMethod}</span></div></div></div><div className="border-b border-black border-dashed mb-2"></div>{trx.items.map((item:any, i:number)=>(<div key={i} className="mb-1"><div>{item.name}</div><div className="flex justify-between"><span>{item.qty} x {fmtMoney(item.price)}</span><span>{fmtMoney(item.qty*item.price)}</span></div></div>))}<div className="border-b border-black border-dashed my-2"></div><div className="space-y-1"><div className="flex justify-between font-bold text-sm border-t border-black border-dashed pt-1"><span>TOTAL</span><span>{fmtMoney(trx.total)}</span></div><div className="flex justify-between mt-2"><span>Bayar</span><span>{fmtMoney(trx.amountPaid)}</span></div><div className="flex justify-between"><span>Kembali</span><span>{fmtMoney(trx.change)}</span></div></div><div className="text-center mt-4 text-[10px]"><p>{receiptConfig.Footer || 'Terima Kasih'}</p>{receiptConfig.Instagram && <p className="mt-1 font-bold">{receiptConfig.Instagram}</p>}</div>
       </>
   );
+
+  const renderPaymentOptions = () => {
+    const basicMethods = ['Cash', 'QRIS', 'Transfer'];
+    const marketMethods = ['ShopeeFood', 'GrabFood', 'GoFood'];
+    
+    return (
+        <div className="space-y-4">
+            <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Direct Payment</p>
+                <div className="grid grid-cols-3 gap-3">
+                    {basicMethods.map(m => (
+                        <button 
+                            key={m} 
+                            onClick={() => setPaymentMethod(m as any)} 
+                            className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${
+                                paymentMethod === m ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm' : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+                            }`}
+                        >
+                            {m === 'Cash' ? <Banknote size={20}/> : m === 'QRIS' ? <QrCode size={20}/> : <CreditCard size={20}/>}
+                            <span className="text-xs font-bold">{m}</span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+            
+            <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Marketplace</p>
+                <div className="grid grid-cols-3 gap-3">
+                    {marketMethods.map(m => (
+                        <button 
+                            key={m} 
+                            onClick={() => setPaymentMethod(m as any)} 
+                            className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${
+                                paymentMethod === m ? 'border-orange-500 bg-orange-50 text-orange-700 shadow-sm' : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+                            }`}
+                        >
+                            <Smartphone size={20}/>
+                            <span className="text-[10px] font-bold whitespace-nowrap">{m}</span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+  };
 
   return (
     <div className="flex flex-col h-[calc(100vh-2rem)] gap-4 pb-4">
       {/* TOP NAVIGATION */}
       <div className="flex justify-between items-center bg-white p-3 rounded-xl border border-slate-200 shadow-sm print:hidden">
-         <div className="flex items-center gap-4"><h1 className="text-xl font-bold text-slate-900 flex items-center gap-2"><Store className="text-blue-600"/> Metalurgi POS</h1><div className="flex bg-slate-100 p-1 rounded-lg"><button onClick={() => setActiveView('cashier')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'cashier' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Mesin Kasir</button><button onClick={() => setActiveView('transactions')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'transactions' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Riwayat Transaksi</button><button onClick={() => setActiveView('shifts')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'shifts' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Riwayat Shift</button></div></div>
+         <div className="flex items-center gap-4">
+            <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2"><Store className="text-blue-600"/> Metalurgi POS</h1>
+            <div className="flex bg-slate-100 p-1 rounded-lg">
+                <button onClick={() => setActiveView('cashier')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'cashier' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Mesin Kasir</button>
+                <button onClick={() => setActiveView('transactions')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'transactions' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Riwayat Transaksi</button>
+                <button onClick={() => setActiveView('shifts')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'shifts' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Riwayat Shift</button>
+                <button onClick={() => setActiveView('analysis')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'analysis' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>POS Analysis</button>
+            </div>
+         </div>
          <div className="flex items-center gap-3">{isShiftOpen && (<div className="flex items-center gap-4 text-xs font-medium text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200"><span className="flex items-center gap-1"><User size={14} className="text-blue-500"/> {shiftData.cashierName}</span><span className="w-px h-3 bg-slate-300"></span><span className="flex items-center gap-1"><Clock size={14} className="text-amber-500"/> {shiftData.shiftName}</span></div>)}{isShiftOpen ? <button onClick={() => setShowCloseShiftModal(true)} className="px-4 py-2 rounded-lg text-xs font-bold bg-rose-100 text-rose-700 hover:bg-rose-200">Tutup Shift</button> : <button onClick={() => setShowShiftModal(true)} className="px-4 py-2 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-700 hover:bg-emerald-200">Buka Kasir</button>}</div>
       </div>
 
@@ -567,29 +712,18 @@ export default function PosPage() {
           {!isJasa && (<div className={`absolute top-2 left-2 px-2 py-0.5 rounded text-[10px] font-bold z-10 flex items-center gap-1 ${liveStock > 10 ? 'bg-emerald-100 text-emerald-700' : liveStock > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'}`}><Box size={10}/> {liveStock > 0 ? `${liveStock} Stok` : 'Habis'}</div>)}
           <div><div className="text-[10px] text-slate-400 mb-1 mt-6">{prod.Category}</div><div className="font-bold text-slate-800 text-sm leading-tight mb-2 line-clamp-2">{prod.Product_Name}</div></div><div className="mt-auto">{promo.hasPromo ? (<div className="flex flex-col"><span className="text-[10px] text-slate-400 line-through">{fmtMoney(parseInt(prod.Sell_Price_List))}</span><span className="text-rose-600 font-bold">{fmtMoney(promo.finalPrice)}</span></div>) : (<div className="text-blue-600 font-bold">{fmtMoney(parseInt(prod.Sell_Price_List))}</div>)}</div></div>); })}</div>}</div></div><div className="w-[350px] bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden"><div className="p-4 border-b border-slate-100 bg-slate-50"><h2 className="font-bold text-slate-800 flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h2></div><div className="flex-1 overflow-y-auto p-4 space-y-3">{cart.length === 0 ? (<div className="text-center text-slate-400 mt-10 flex flex-col items-center"><ShoppingCart size={40} className="mb-2 opacity-20"/><p className="text-sm">Keranjang Kosong</p></div>) : cart.map((item, i) => (<div key={i} className="flex justify-between items-start border-b border-slate-100 pb-2"><div className="flex-1"><div className="text-sm font-bold text-slate-800">{item.name}</div><div className="text-xs text-blue-600">{fmtMoney(item.price)}</div></div><div className="flex items-center gap-3"><div className="flex items-center gap-2 bg-slate-100 rounded-lg px-1"><button onClick={() => updateQty(item.sku, -1)} className="p-1 text-slate-500 hover:text-rose-600 font-bold">-</button><span className="text-xs font-bold w-4 text-center">{item.qty}</span><button onClick={() => updateQty(item.sku, 1)} className="p-1 text-slate-500 hover:text-emerald-600 font-bold">+</button></div><button onClick={() => removeFromCart(item.sku)} className="text-slate-300 hover:text-rose-500"><Trash2 size={16}/></button></div></div>))}</div><div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3"><div className="flex justify-between text-lg font-bold text-slate-900"><span>Total</span><span>{fmtMoney(cartTotal)}</span></div><button onClick={() => cartTotal > 0 && setShowPaymentModal(true)} disabled={cartTotal === 0} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all">Bayar Sekarang</button></div></div></div>)}
       
-      {/* VIEW 2: TRANSACTIONS (WITH CLOUD TOGGLE) */}
+      {/* VIEW 2: TRANSACTIONS */}
       {activeView === 'transactions' && (
         <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col print:hidden">
             <div className="p-4 border-b border-slate-100 bg-white space-y-4">
                 <div className="flex flex-wrap items-center gap-3 justify-between">
                     <div className="flex gap-3">
-                        {/* [REVISI] Date Picker dengan Icon Calendar */}
                         <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
                             <Calendar size={14} className="text-slate-400"/>
                             <span className="text-xs font-bold text-slate-500">From</span>
-                            <input 
-                                type="date" 
-                                className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" 
-                                value={dateRange.start} 
-                                onChange={e => setDateRange({...dateRange, start: e.target.value})}
-                            />
+                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
                             <span className="text-xs font-bold text-slate-500">To</span>
-                            <input 
-                                type="date" 
-                                className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" 
-                                value={dateRange.end} 
-                                onChange={e => setDateRange({...dateRange, end: e.target.value})}
-                            />
+                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
                         </div>
                         <select className="text-xs p-2 rounded-lg border border-slate-200" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}>
                             <option value="all">Semua Shift</option>{masterShifts.map((s,i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name}</option>)}
@@ -615,7 +749,13 @@ export default function PosPage() {
                     </>
                   )}
                   {viewSource === 'cloud' && (
-                     <button onClick={fetchCloudData} disabled={isLoadingCloud} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600"><RefreshCw size={16} className={isLoadingCloud ? "animate-spin" : ""}/></button>
+                     <div className="flex items-center gap-2">
+                         <button onClick={runGLAudit} disabled={isAuditingGL} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all border ${isAuditingGL ? 'bg-slate-100 text-slate-400 border-slate-200' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50 shadow-sm'}`}>
+                             {isAuditingGL ? <Loader2 size={14} className="animate-spin"/> : <ShieldAlert size={14} className={auditDone && unsyncedGLIds.length > 0 ? "text-rose-500" : "text-blue-500"}/>} 
+                             {isAuditingGL ? 'Checking GL...' : 'Audit GL Sync'}
+                         </button>
+                         <button onClick={fetchCloudData} disabled={isLoadingCloud} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 border border-slate-200 shadow-sm"><RefreshCw size={16} className={isLoadingCloud ? "animate-spin" : ""}/></button>
+                     </div>
                   )}
                 </div>
             </div>
@@ -630,14 +770,23 @@ export default function PosPage() {
                         <tr><th className="p-4">No. Transaksi</th><th className="p-4">Waktu</th><th className="p-4">Produk</th><th className="p-4 text-center">Qty</th><th className="p-4 text-right">Total (Rp)</th><th className="p-4 text-center">Action</th></tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                        {/* [REVISI] Gunakan paginatedHistory, BUKAN filteredHistory */}
-                        {paginatedHistory.map((trx, idx) => (
-                            <tr key={idx} className="hover:bg-blue-50/50">
+                        {paginatedHistory.map((trx, idx) => {
+                            const isGLMissing = auditDone && unsyncedGLIds.includes(trx.id);
+                            return (
+                            <tr key={idx} className={`hover:bg-blue-50/50 ${isGLMissing ? 'bg-rose-50/30' : ''}`}>
                                 <td className="p-4 font-mono font-bold text-xs text-slate-600 align-top">
-                                  {trx.id} {trx.isCloud && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[9px]">CLOUD</span>}
+                                  {trx.id} 
+                                  {trx.isCloud && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[9px]">CLOUD</span>}
+                                  
+                                  {auditDone && viewSource === 'cloud' && (
+                                      isGLMissing 
+                                      ? <span className="ml-2 px-1.5 py-0.5 bg-rose-100 text-rose-700 border border-rose-200 rounded text-[9px] font-bold flex items-center w-fit mt-1 gap-1"><ShieldAlert size={10}/> GL Missing</span>
+                                      : <span className="ml-2 px-1.5 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded text-[9px] font-bold flex items-center w-fit mt-1 gap-1"><CheckCircle size={10}/> GL Synced</span>
+                                  )}
+
+                                  <div className="mt-1 text-[10px] font-normal text-slate-400 px-1.5 py-0.5 bg-slate-100 rounded w-fit">{trx.paymentMethod}</div>
                                 </td>
                                 <td className="p-4 text-slate-500 text-xs align-top">
-                                    {/* [REVISI] Tampilkan Tanggal LIVE, bukan split string biasa yang rawan error */}
                                     <div>{new Date(trx.date).toLocaleDateString()}</div>
                                     <div>{new Date(trx.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
                                 </td>
@@ -646,37 +795,20 @@ export default function PosPage() {
                                 <td className="p-4 text-right font-bold text-slate-900 align-top">{fmtMoney(trx.total)}</td>
                                 <td className="p-4 text-center align-top flex gap-2 justify-center">
                                     <button onClick={() => { setCurrentTrx(trx); setPrintType('receipt'); setShowReceiptPreview(true); }} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-slate-800" title="Preview & Print"><Printer size={16}/></button>
-                                    {/* DELETE BUTTON (Hanya muncul di LOCAL view) */}
                                     {viewSource === 'local' && (
                                         <button onClick={() => handleDeleteTransaction(trx.id)} className="p-2 bg-white border border-rose-200 rounded-lg hover:bg-rose-50 text-rose-500 hover:text-rose-700" title="Hapus Transaksi Ini"><Trash2 size={16}/></button>
                                     )}
                                 </td>
                             </tr>
-                        ))}
+                        )})}
                     </tbody>
                 </table>
-                
-                {/* [NEW] Pagination Controls */}
                 {totalPages > 1 && (
                     <div className="p-4 border-t border-slate-100 flex justify-between items-center bg-slate-50">
-                        <span className="text-xs text-slate-500">
-                            Page <b>{currentPage}</b> of <b>{totalPages}</b> ({filteredHistory.length} Total)
-                        </span>
+                        <span className="text-xs text-slate-500">Page <b>{currentPage}</b> of <b>{totalPages}</b> ({filteredHistory.length} Total)</span>
                         <div className="flex gap-2">
-                            <button 
-                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                disabled={currentPage === 1}
-                                className="p-2 bg-white border rounded hover:bg-slate-100 disabled:opacity-50"
-                            >
-                                <ChevronLeft size={16}/>
-                            </button>
-                            <button 
-                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                disabled={currentPage === totalPages}
-                                className="p-2 bg-white border rounded hover:bg-slate-100 disabled:opacity-50"
-                            >
-                                <ChevronRight size={16}/>
-                            </button>
+                            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-2 bg-white border rounded hover:bg-slate-100 disabled:opacity-50"><ChevronLeft size={16}/></button>
+                            <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-2 bg-white border rounded hover:bg-slate-100 disabled:opacity-50"><ChevronRight size={16}/></button>
                         </div>
                     </div>
                 )}
@@ -699,41 +831,306 @@ export default function PosPage() {
                 </button>
             </div>
         </div>
-        <div className="flex-1 overflow-auto p-0"><table className="w-full text-sm text-left"><thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10"><tr><th className="p-4">Tanggal</th><th className="p-4">Shift</th><th className="p-4 text-right">Total Penjualan</th><th className="p-4 text-right">Fisik Akhir</th><th className="p-4 text-right">Selisih</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{shiftHistory.map((s, i) => (<tr key={i} className="hover:bg-blue-50"><td className="p-4 font-mono text-xs">{new Date(s.startTime).toLocaleDateString()}</td><td className="p-4 font-bold text-slate-700">{s.shiftName} / {s.cashierName}</td><td className="p-4 text-right font-bold text-emerald-600">{fmtMoney(s.totalSales)}</td><td className="p-4 text-right font-bold">{fmtMoney(s.endCashActual)}</td><td className={`p-4 text-right font-bold ${s.variance < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{fmtMoney(s.variance)}</td><td className="p-4 text-center"><button onClick={() => { setShiftReportData(s); setPrintType('shift_report'); setShowReceiptPreview(true); }} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-blue-600"><Printer size={16}/></button></td></tr>))}</tbody></table></div></div>)}
+        <div className="flex-1 overflow-auto p-0"><table className="w-full text-sm text-left"><thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10"><tr><th className="p-4">Tanggal</th><th className="p-4">Shift</th><th className="p-4 text-right">Gross Sales</th><th className="p-4 text-right">Fisik Akhir</th><th className="p-4 text-right">Selisih</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{shiftHistory.map((s, i) => (<tr key={i} className="hover:bg-blue-50"><td className="p-4 font-mono text-xs">{new Date(s.startTime).toLocaleDateString()}</td><td className="p-4 font-bold text-slate-700">{s.shiftName} / {s.cashierName}</td><td className="p-4 text-right font-bold text-blue-600">{fmtMoney(s.grossSales || s.totalSales)}</td><td className="p-4 text-right font-bold">{fmtMoney(s.endCashActual)}</td><td className={`p-4 text-right font-bold ${s.variance < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{fmtMoney(s.variance)}</td><td className="p-4 text-center"><button onClick={() => { setShiftReportData(s); setPrintType('shift_report'); setShowReceiptPreview(true); }} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-blue-600"><Printer size={16}/></button></td></tr>))}</tbody></table></div></div>)}
 
-      {/* MODALS & POPUPS (SAME AS BEFORE) */}
+      {/* --- VIEW 4: POS ANALYSIS --- */}
+      {activeView === 'analysis' && (
+        <div className="flex-1 overflow-hidden flex flex-col print:hidden space-y-4">
+            {/* Filter Bar */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                <div>
+                    <h2 className="font-bold text-slate-800 flex items-center gap-2"><BarChart3 className="text-blue-600"/> POS Analysis (Daily)</h2>
+                    <p className="text-xs text-slate-500 mt-1">Data filter: {dateRange.start} s/d {dateRange.end} | Sumber Produk SKU: {viewSource.toUpperCase()}</p>
+                </div>
+                <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
+                    <Calendar size={14} className="text-slate-400"/>
+                    <span className="text-xs font-bold text-slate-500">From</span>
+                    <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
+                    <span className="text-xs font-bold text-slate-500">To</span>
+                    <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto flex gap-4 pb-4">
+                {/* Kolom Kiri: Payment Reconciliation & Marketplace */}
+                <div className="w-[45%] flex flex-col gap-4">
+                    
+                    {/* RECONCILIATION TABLE */}
+                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                        <h3 className="text-sm font-bold text-slate-800 mb-4 uppercase flex items-center gap-2"><PieChart size={16}/> Payment Reconciliation</h3>
+                        <div className="flex-1 overflow-x-auto">
+                            <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-50 text-slate-500 border-b border-slate-100">
+                                    <tr>
+                                        <th className="p-2">Metode</th>
+                                        <th className="p-2 text-right">Local (Device)</th>
+                                        <th className="p-2 text-right">Cloud (Sheet)</th>
+                                        <th className="p-2 text-right">Variance</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                    {analysisData.reconcileStats.map((stat, idx) => (
+                                        <tr key={idx} className="hover:bg-slate-50">
+                                            <td className="p-2 font-bold text-slate-700">{stat.method}</td>
+                                            <td className="p-2 text-right font-mono text-slate-600">{fmtMoney(stat.local)}</td>
+                                            <td className="p-2 text-right font-mono text-blue-600">{fmtMoney(stat.cloud)}</td>
+                                            <td className={`p-2 text-right font-bold ${stat.variance === 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                                {stat.variance === 0 ? '0' : fmtMoney(stat.variance)}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                                <tfoot>
+                                    <tr className="border-t-2 border-slate-200">
+                                        <th className="p-2 font-bold text-slate-800">TOTAL</th>
+                                        <th className="p-2 text-right font-bold text-slate-800">{fmtMoney(analysisData.totalLocal)}</th>
+                                        <th className="p-2 text-right font-bold text-blue-700">{fmtMoney(analysisData.totalCloud)}</th>
+                                        <th className={`p-2 text-right font-bold ${analysisData.totalLocal - analysisData.totalCloud === 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                            {fmtMoney(analysisData.totalLocal - analysisData.totalCloud)}
+                                        </th>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* Marketplace Est. Profit Card */}
+                    <div className="bg-slate-900 text-white p-5 rounded-xl shadow-md border border-slate-800 flex flex-col">
+                        <h3 className="text-sm font-bold text-slate-300 mb-4 uppercase flex items-center gap-2"><Smartphone size={16}/> Marketplace Profit Est. (Cloud Base)</h3>
+                        <div className="space-y-3 flex-1 text-sm">
+                            <div className="flex justify-between text-slate-400"><span>Gross AR Shopee:</span><span className="font-mono">{fmtMoney(analysisData.estCommission.GrossShopee)}</span></div>
+                            <div className="flex justify-between text-slate-400"><span>Gross AR Grab:</span><span className="font-mono">{fmtMoney(analysisData.estCommission.GrossGrab)}</span></div>
+                            <div className="flex justify-between text-slate-400"><span>Gross AR GoFood:</span><span className="font-mono">{fmtMoney(analysisData.estCommission.GrossGoFood)}</span></div>
+                            
+                            <div className="flex justify-between text-rose-400 italic pt-2 border-t border-slate-700">
+                                <span>(-) Est. Commission:</span>
+                                <span className="font-mono">{fmtMoney(analysisData.estCommission.ShopeeFood + analysisData.estCommission.GrabFood + analysisData.estCommission.GoFood)}</span>
+                            </div>
+                        </div>
+                        <div className="pt-3 border-t border-slate-700 flex justify-between items-center font-bold text-emerald-400 mt-4 text-lg">
+                            <span>Est. Net Receivable</span>
+                            <span>{fmtMoney(
+                                (analysisData.estCommission.GrossShopee + analysisData.estCommission.GrossGrab + analysisData.estCommission.GrossGoFood) - 
+                                (analysisData.estCommission.ShopeeFood + analysisData.estCommission.GrabFood + analysisData.estCommission.GoFood)
+                            )}</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Kolom Kanan: SKU Breakdown */}
+                <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+                    <div className="p-4 border-b border-slate-100 bg-slate-50">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2"><Box size={16}/> Daily SKU Performance</h3>
+                    </div>
+                    <div className="flex-1 overflow-auto">
+                        <table className="w-full text-sm text-left relative">
+                            <thead className="bg-white text-slate-500 text-xs uppercase border-b border-slate-100 font-bold sticky top-0 z-10">
+                                <tr><th className="p-4">Rank</th><th className="p-4">Nama Produk</th><th className="p-4 text-center">Qty</th><th className="p-4 text-right">Total Nominal</th></tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 pb-10">
+                                {analysisData.rankedSKU.length === 0 ? (
+                                    <tr><td colSpan={4} className="p-8 text-center text-slate-400">Belum ada penjualan.</td></tr>
+                                ) : (
+                                    analysisData.rankedSKU.map((item, idx) => (
+                                        <tr key={idx} className="hover:bg-blue-50/50">
+                                            <td className="p-4 text-slate-400 font-mono text-xs">#{idx + 1}</td>
+                                            <td className="p-4 font-bold text-slate-700">{item.name}</td>
+                                            <td className="p-4 text-center"><span className="bg-slate-100 px-2 py-1 rounded-md font-bold">{item.qty}</span></td>
+                                            <td className="p-4 text-right font-bold text-emerald-600">{fmtMoney(item.total)}</td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                            <tfoot className="bg-blue-50 border-t-2 border-blue-200 sticky bottom-0 z-10">
+                                <tr>
+                                    <th colSpan={2} className="p-4 text-right font-bold text-blue-900 uppercase">TOTAL KESELURUHAN</th>
+                                    <th className="p-4 text-center font-bold text-blue-900 text-lg">{analysisData.grandTotalQty}</th>
+                                    <th className="p-4 text-right font-bold text-blue-700 text-lg">{fmtMoney(analysisData.grandTotalAmount)}</th>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* MODALS & POPUPS */}
       {showShiftModal && (<div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6 text-center animate-in zoom-in-95"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4"><Store size={32}/></div><h3 className="font-bold text-xl text-slate-900 mb-2">Buka Shift Kasir</h3><div className="space-y-3 text-left"><div><label className="text-xs font-bold text-slate-500">Pilih Kasir</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedCashier(e.target.value)}><option value="">-- Pilih --</option>{masterCashiers.map((c, i) => <option key={i} value={c.Name}>{c.Name}</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Pilih Shift</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedShift(e.target.value)}><option value="">-- Pilih --</option>{masterShifts.map((s, i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name} ({s.Start_Time || '00:00'}-{s.End_Time || '23:59'})</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Saldo Awal (Modal)</label><input type="number" className="w-full p-2 border rounded-lg mt-1" placeholder="Rp" onChange={e => setStartCashInput(parseInt(e.target.value)||0)}/></div><button onClick={handleOpenShift} className="w-full py-3 mt-2 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">Buka Toko</button></div></div></div>)}
       
-      {showCloseShiftModal && (<div className="fixed inset-0 bg-slate-900/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95"><div className="p-5 border-b flex justify-between items-center bg-slate-50"><h3 className="font-bold text-lg text-slate-800 flex items-center gap-2"><LogOut className="text-rose-600"/> Tutup Shift</h3><button onClick={() => setShowCloseShiftModal(false)}><X className="text-slate-400"/></button></div><div className="p-6 space-y-4"><div className="bg-blue-50 p-4 rounded-xl space-y-2 text-sm border border-blue-100"><div className="flex justify-between"><span>Saldo Awal (Modal)</span><span className="font-mono">{fmtMoney(shiftData.startCash)}</span></div><div className="flex justify-between"><span>Total Penjualan</span><span className="font-mono">{fmtMoney(shiftData.totalSales)}</span></div><div className="border-t border-blue-200 pt-2 flex justify-between font-bold text-blue-800"><span>Total Seharusnya</span><span>{fmtMoney(shiftData.startCash + shiftData.totalSales)}</span></div></div><div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] font-bold text-slate-500 uppercase">Cash Out / Keluar</label><input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm mt-1 text-rose-600 font-bold" placeholder="0" onChange={e => setCashOutInput(parseInt(e.target.value)||0)}/></div><div><label className="text-[10px] font-bold text-slate-500 uppercase">Total Kembalian</label><div className="w-full p-2 border border-slate-200 bg-slate-50 rounded-lg text-sm mt-1 text-slate-600 font-mono">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id).reduce((acc, t) => acc + t.change, 0))}</div></div></div><div><label className="text-xs font-bold text-slate-600 uppercase">Saldo Fisik Aktual</label><input type="number" autoFocus className="w-full p-3 border border-slate-300 rounded-xl text-lg font-bold mt-1" placeholder="Masukkan total uang di laci" onChange={e => setEndCashInput(parseInt(e.target.value)||0)}/><div className={`text-right text-xs mt-1 font-bold ${endCashInput - (shiftData.startCash + allTransactions.filter(t => t.shiftId === shiftData.id && t.paymentMethod === 'Cash').reduce((acc, t) => acc + t.total, 0) - cashOutInput) !== 0 ? 'text-rose-600' : 'text-emerald-600'}`}>Selisih: {fmtMoney(endCashInput - (shiftData.startCash + allTransactions.filter(t => t.shiftId === shiftData.id && t.paymentMethod === 'Cash').reduce((acc, t) => acc + t.total, 0) - cashOutInput))}</div></div><div><label className="text-xs font-bold text-slate-600 uppercase">Catatan / Keterangan</label><textarea className="w-full p-2 border border-slate-300 rounded-lg text-sm mt-1" rows={2} placeholder="Alasan selisih, dll..." onChange={e => setClosingNote(e.target.value)}></textarea></div></div><div className="p-5 border-t flex gap-3"><button onClick={() => setShowCloseShiftModal(false)} className="flex-1 py-3 bg-white border border-slate-300 font-bold text-slate-600 rounded-xl hover:bg-slate-50">Batal</button><button onClick={handleCloseShift} className="flex-1 py-3 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 shadow-lg shadow-rose-200">Tutup & Cetak Laporan</button></div></div></div>)}
+      {/* MODAL TUTUP SHIFT */}
+      {showCloseShiftModal && (<div className="fixed inset-0 bg-slate-900/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden">
+        <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden animate-in zoom-in-95 max-h-[95vh] flex flex-col">
+            <div className="p-5 border-b flex justify-between items-center bg-slate-50">
+                <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2"><LogOut className="text-rose-600"/> Objective Shift Closing</h3>
+                <button onClick={() => setShowCloseShiftModal(false)}><X className="text-slate-400"/></button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-6 flex flex-col lg:flex-row gap-6">
+                {/* Kolom Kiri: Sales & SKU Scrollable */}
+                <div className="flex-1 flex flex-col gap-4">
+                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                        <h4 className="text-xs font-bold text-blue-800 mb-2 uppercase border-b border-blue-200 pb-1">A. Sales Performance</h4>
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                            <div className="flex justify-between"><span>Gross Sales</span><span className="font-mono">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id).reduce((acc, t) => acc + t.total, 0))}</span></div>
+                            <div className="flex justify-between"><span>Discount</span><span className="font-mono text-rose-600">Rp 0</span></div>
+                            <div className="flex justify-between"><span>Tax</span><span className="font-mono">Rp 0</span></div>
+                            <div className="flex justify-between font-bold text-blue-900 border-t border-blue-200 pt-1"><span>Net Sales</span><span className="font-mono text-lg">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id).reduce((acc, t) => acc + t.total, 0))}</span></div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 bg-white border border-slate-200 rounded-xl flex flex-col overflow-hidden min-h-[200px]">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase bg-slate-50 p-3 border-b border-slate-200">Itemized Sales (Cek Fisik)</h4>
+                        <div className="flex-1 overflow-y-auto p-0">
+                            <table className="w-full text-xs text-left">
+                                <thead className="bg-white text-slate-400 sticky top-0 border-b border-slate-100">
+                                    <tr><th className="p-2 pl-3 font-normal">Nama Item</th><th className="p-2 text-center font-normal">Qty</th><th className="p-2 pr-3 text-right font-normal">Nominal</th></tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                    {(() => {
+                                        const shiftItemsMap: Record<string, {name: string, qty: number, total: number}> = {};
+                                        allTransactions.filter(t => t.shiftId === shiftData.id).forEach(t => {
+                                            t.items.forEach((item:any) => {
+                                                if (!shiftItemsMap[item.sku]) shiftItemsMap[item.sku] = { name: item.name, qty: 0, total: 0 };
+                                                shiftItemsMap[item.sku].qty += item.qty;
+                                                shiftItemsMap[item.sku].total += (item.qty * item.price);
+                                            });
+                                        });
+                                        const mappedItems = Object.values(shiftItemsMap).sort((a,b)=>b.total - a.total);
+                                        
+                                        if (mappedItems.length === 0) return <tr><td colSpan={3} className="p-4 text-center text-slate-400">Kosong</td></tr>;
+                                        
+                                        return mappedItems.map((item, idx) => (
+                                            <tr key={idx} className="hover:bg-slate-50">
+                                                <td className="p-2 pl-3 font-medium text-slate-700">{item.name}</td>
+                                                <td className="p-2 text-center font-bold">{item.qty}</td>
+                                                <td className="p-2 pr-3 text-right text-emerald-600">{fmtMoney(item.total)}</td>
+                                            </tr>
+                                        ));
+                                    })()}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Kolom Kanan: Payment Breakdown & Cash Control */}
+                <div className="flex-1 flex flex-col gap-6">
+                    <div>
+                        <h4 className="text-xs font-bold text-slate-500 mb-2 uppercase border-b pb-1">B. Payment Breakdown</h4>
+                        <div className="space-y-1 text-sm bg-slate-50 p-4 rounded-xl border border-slate-100">
+                            {['Cash', 'QRIS', 'Transfer', 'ShopeeFood', 'GrabFood', 'GoFood'].map(method => (
+                                <div key={method} className="flex justify-between items-center">
+                                    <span className="text-slate-600">{method}</span>
+                                    <span className="font-mono font-bold">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id && t.paymentMethod === method).reduce((acc, t) => acc + t.total, 0))}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        <h4 className="text-xs font-bold text-amber-600 mb-2 uppercase border-b border-amber-200 pb-1">C. Cash Control (Fisik)</h4>
+                        <div className="space-y-3 bg-amber-50/50 p-4 rounded-xl border border-amber-100">
+                            <div className="flex justify-between text-sm">
+                                <span className="text-slate-600">Start Cash (Modal)</span>
+                                <span className="font-mono font-bold">{fmtMoney(shiftData.startCash)}</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">Cash Out / Keluar</label>
+                                    <input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm mt-1 text-rose-600 font-bold bg-white" placeholder="0" value={cashOutInput || ''} onChange={e => setCashOutInput(parseInt(e.target.value)||0)}/>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-emerald-600 uppercase">Actual Cash (Laci)</label>
+                                    <input type="number" className="w-full p-2 border-2 border-emerald-300 bg-white rounded-lg text-sm mt-1 text-emerald-700 font-bold shadow-sm focus:ring-2 ring-emerald-200 outline-none" placeholder="Hitung Fisik" onChange={e => setEndCashInput(parseInt(e.target.value)||0)}/>
+                                </div>
+                            </div>
+                            
+                            <div className={`p-3 rounded-lg text-sm flex justify-between items-center shadow-inner ${
+                                endCashInput - (shiftData.startCash + allTransactions.filter(t => t.shiftId === shiftData.id && t.paymentMethod === 'Cash').reduce((acc, t) => acc + t.total, 0) - cashOutInput) === 0 
+                                ? 'bg-emerald-500 text-white font-bold' 
+                                : 'bg-rose-500 text-white font-bold'
+                            }`}>
+                                <span className="uppercase text-xs tracking-wider">Variance (Selisih)</span>
+                                <span className="text-lg">{fmtMoney(endCashInput - (shiftData.startCash + allTransactions.filter(t => t.shiftId === shiftData.id && t.paymentMethod === 'Cash').reduce((acc, t) => acc + t.total, 0) - cashOutInput))}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="text-xs font-bold text-slate-600 uppercase">Catatan Closing</label>
+                        <textarea className="w-full p-2 border border-slate-300 rounded-lg text-sm mt-1 bg-slate-50" rows={2} placeholder="Tulis alasan jika ada selisih kas..." onChange={e => setClosingNote(e.target.value)}></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <div className="p-5 border-t bg-slate-50 flex gap-3 mt-auto">
+                <button onClick={() => setShowCloseShiftModal(false)} className="flex-1 py-3 bg-white border border-slate-300 font-bold text-slate-600 rounded-xl hover:bg-slate-50">Batal</button>
+                <button onClick={handleCloseShift} className="flex-1 py-3 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 shadow-lg shadow-rose-200">Tutup & Cetak Laporan</button>
+            </div>
+        </div>
+      </div>)}
       
-      {showPaymentModal && (<div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"><div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg text-slate-800">Pembayaran</h3><button onClick={() => setShowPaymentModal(false)}><X className="text-slate-400"/></button></div><div className="p-6 space-y-6"><div className="text-center"><p className="text-sm text-slate-500 mb-1">Total Tagihan</p><h2 className="text-3xl font-bold text-slate-900">{fmtMoney(cartTotal)}</h2></div><div className="grid grid-cols-3 gap-3">{['Cash', 'QRIS', 'Transfer'].map(m => (<button key={m} onClick={() => setPaymentMethod(m as any)} className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${paymentMethod === m ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}>{m === 'Cash' ? <Banknote size={20}/> : m === 'QRIS' ? <QrCode size={20}/> : <CreditCard size={20}/>}<span className="text-xs font-bold">{m}</span></button>))}</div>{paymentMethod === 'Cash' && (<div><label className="block text-xs font-bold text-slate-500 mb-1">Uang Diterima</label><input type="number" autoFocus className="w-full p-3 border border-slate-300 rounded-xl text-lg font-bold" value={amountPaid} onChange={e => setAmountPaid(parseInt(e.target.value) || 0)} placeholder="0"/><div className="flex gap-2 mt-2">{[cartTotal, 50000, 100000].map(amt => (<button key={amt} onClick={() => setAmountPaid(amt)} className="px-3 py-1 bg-slate-100 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-200">{fmtMoney(amt)}</button>))}</div></div>)}<div className="bg-slate-50 p-4 rounded-xl flex justify-between items-center"><span className="text-sm font-bold text-slate-600">Kembalian</span><span className={`text-xl font-bold ${changeDue < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{changeDue < 0 ? '-' : fmtMoney(changeDue)}</span></div></div><div className="p-5 border-t"><button onClick={handleProcessPayment} className="w-full py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 shadow-lg shadow-emerald-200">Selesaikan Transaksi</button></div></div></div>)}
+      {/* MODAL PAYMENT */}
+      {showPaymentModal && (
+          <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden">
+              <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+                  <div className="p-5 border-b flex justify-between items-center">
+                      <h3 className="font-bold text-lg text-slate-800">Pilih Metode Pembayaran</h3>
+                      <button onClick={() => setShowPaymentModal(false)}><X className="text-slate-400"/></button>
+                  </div>
+                  <div className="p-6 space-y-6">
+                      <div className="text-center">
+                          <p className="text-sm text-slate-500 mb-1">Total Tagihan</p>
+                          <h2 className="text-3xl font-bold text-slate-900">{fmtMoney(cartTotal)}</h2>
+                      </div>
+                      
+                      {renderPaymentOptions()}
+
+                      {paymentMethod === 'Cash' && (
+                          <div>
+                              <label className="block text-xs font-bold text-slate-500 mb-1">Uang Diterima</label>
+                              <input type="number" autoFocus className="w-full p-3 border border-slate-300 rounded-xl text-lg font-bold" value={amountPaid} onChange={e => setAmountPaid(parseInt(e.target.value) || 0)} placeholder="0"/>
+                              <div className="flex gap-2 mt-2">
+                                  {[cartTotal, 50000, 100000].map(amt => (
+                                      <button key={amt} onClick={() => setAmountPaid(amt)} className="px-3 py-1 bg-slate-100 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-200">
+                                          {fmtMoney(amt)}
+                                      </button>
+                                  ))}
+                              </div>
+                          </div>
+                      )}
+                      
+                      <div className="bg-slate-50 p-4 rounded-xl flex justify-between items-center">
+                          <span className="text-sm font-bold text-slate-600">Kembalian</span>
+                          <span className={`text-xl font-bold ${changeDue < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                              {changeDue < 0 ? '-' : fmtMoney(changeDue)}
+                          </span>
+                      </div>
+                  </div>
+                  <div className="p-5 border-t">
+                      <button onClick={handleProcessPayment} className="w-full py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 shadow-lg shadow-emerald-200">
+                          Selesaikan Transaksi
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
       
       {showSuccessModal && (<div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl text-center p-8 animate-in zoom-in-95"><div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle2 size={32}/></div><h3 className="font-bold text-xl text-slate-900 mb-2">Transaksi Berhasil!</h3><p className="text-sm text-slate-500 mb-6">Total Transaksi: <span className="font-bold text-slate-800">{fmtMoney(currentTrx?.total || 0)}</span></p><div className="space-y-3"><button onClick={() => setShowSuccessModal(false)} className="w-full py-3 bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200">Simpan Transaksi Saja</button><button onClick={handlePrintReceipt} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 flex items-center justify-center gap-2"><Printer size={18}/> Preview & Cetak Nota</button></div></div></div>)}
       
       {/* PREVIEW MODAL */}
       {showReceiptPreview && (<div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"><div className="p-4 border-b flex justify-between items-center bg-slate-50"><h3 className="font-bold text-slate-800">Preview Cetakan</h3><button onClick={() => setShowReceiptPreview(false)}><X className="text-slate-400"/></button></div><div className="p-8 bg-slate-200 overflow-y-auto flex justify-center"><div className="bg-white p-4 w-[300px] shadow-sm text-[10px] font-mono leading-tight">{printType === 'receipt' && currentTrx && <ReceiptTemplate trx={currentTrx}/>}{printType === 'shift_report' && shiftReportData && <ShiftReportTemplate data={shiftReportData}/>}</div></div><div className="p-4 border-t bg-white flex justify-end gap-2"><button onClick={() => setShowReceiptPreview(false)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-50 rounded-lg">Batal</button><button onClick={() => window.print()} className="px-6 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 flex items-center gap-2"><Printer size={16}/><FileDown size={16}/> Cetak / Simpan PDF</button></div></div></div>)}
       
-      {/* --- REVISI: PRINT AREA OPTIMIZED (58mm & 80mm Safe) --- */}
+      {/* --- PRINT AREA --- */}
       <div className="hidden print:block print:w-full">
         <style jsx global>{`
           @media print {
-            @page {
-              margin: 0; /* Hapus margin default browser */
-              size: auto; 
-            }
-            body {
-              margin: 0;
-              padding: 0;
-            }
-            /* Sembunyikan elemen lain saat nge-print */
-            body > *:not(.print\\:block) {
-              display: none;
-            }
+            @page { margin: 0; size: auto; }
+            body { margin: 0; padding: 0; }
+            body > *:not(.print\\:block) { display: none; }
           }
         `}</style>
-
-        {/* Container Struk: Sesuaikan width di sini (58mm atau 80mm) */}
-        {/* saran: gunakan max-w-[58mm] atau max-w-[80mm] agar fleksibel */}
         <div className="w-[58mm] bg-white text-black p-1 text-[10px] font-mono leading-tight mx-auto">
             {printType === 'receipt' && currentTrx && <ReceiptTemplate trx={currentTrx}/>}
             {printType === 'shift_report' && shiftReportData && <ShiftReportTemplate data={shiftReportData}/>}
