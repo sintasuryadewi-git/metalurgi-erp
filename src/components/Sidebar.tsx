@@ -6,13 +6,14 @@ import { usePathname, useRouter } from 'next/navigation';
 import { 
   LayoutDashboard, ArrowRightLeft, Package, BookOpen, Tags, 
   LineChart, PieChart, Settings, LogOut, Calculator, Store, 
-  Target, Users, X, ChevronLeft 
+  Target, Users, X, ChevronLeft, Building2 
 } from 'lucide-react';
 
 const MENU_ITEMS = [
   { name: 'Dashboard', path: '/', icon: LayoutDashboard },
   { name: 'POS System', path: '/pos', icon: Store },
   { name: 'Transactions', path: '/transactions', icon: ArrowRightLeft },
+  { name: 'Bank Register', path: '/bank-register', icon: Building2 },
   { name: 'Inventory', path: '/inventory', icon: Package },
   { name: 'General Ledger', path: '/general-ledger', icon: BookOpen },
   { name: 'Pricing Strategy', path: '/pricing', icon: Tags },
