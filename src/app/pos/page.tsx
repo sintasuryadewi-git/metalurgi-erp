@@ -722,17 +722,37 @@ export default function PosPage() {
   return (
     <div className="flex flex-col h-[calc(100vh-2rem)] gap-4 pb-4">
       {/* TOP NAVIGATION */}
-      <div className="flex justify-between items-center bg-white p-3 rounded-xl border border-slate-200 shadow-sm print:hidden">
-         <div className="flex items-center gap-4">
-            <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2"><Store className="text-blue-600"/> Metalurgi POS</h1>
-            <div className="flex bg-slate-100 p-1 rounded-lg">
-                <button onClick={() => setActiveView('cashier')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'cashier' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Mesin Kasir</button>
-                <button onClick={() => setActiveView('transactions')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'transactions' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Riwayat Transaksi</button>
-                <button onClick={() => setActiveView('shifts')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'shifts' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Riwayat Shift</button>
-                <button onClick={() => setActiveView('analysis')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${activeView === 'analysis' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>POS Analysis</button>
+      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm print:hidden flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-0">
+         
+         {/* Kiri/Atas: Logo & Tombol Kasir (Khusus Mobile) */}
+         <div className="flex justify-between items-center w-full md:w-auto md:gap-4">
+            <h1 className="text-lg md:text-xl font-bold text-slate-900 flex items-center gap-2">
+               <Store className="text-blue-600"/> Metalurgi POS
+            </h1>
+            
+            {/* Tampilan Status Shift khusus layar HP agar rapi */}
+            <div className="flex md:hidden items-center gap-2">
+                {isShiftOpen && (<div className="flex items-center gap-1 text-[10px] font-medium text-slate-600 bg-slate-50 px-2 py-1 rounded-md border border-slate-200"><User size={10} className="text-blue-500"/> {shiftData.cashierName}</div>)}
+                {isShiftOpen ? <button onClick={() => setShowCloseShiftModal(true)} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-100 text-rose-700">Tutup</button> : <button onClick={() => setShowShiftModal(true)} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-700">Buka</button>}
             </div>
          </div>
-         <div className="flex items-center gap-3">{isShiftOpen && (<div className="flex items-center gap-4 text-xs font-medium text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200"><span className="flex items-center gap-1"><User size={14} className="text-blue-500"/> {shiftData.cashierName}</span><span className="w-px h-3 bg-slate-300"></span><span className="flex items-center gap-1"><Clock size={14} className="text-amber-500"/> {shiftData.shiftName}</span></div>)}{isShiftOpen ? <button onClick={() => setShowCloseShiftModal(true)} className="px-4 py-2 rounded-lg text-xs font-bold bg-rose-100 text-rose-700 hover:bg-rose-200">Tutup Shift</button> : <button onClick={() => setShowShiftModal(true)} className="px-4 py-2 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-700 hover:bg-emerald-200">Buka Kasir</button>}</div>
+
+         {/* Tengah: Menu Tab Bisa Digeser di HP (Scrollable) */}
+         <div className="w-full md:w-auto overflow-x-auto custom-scrollbar pb-1 md:pb-0">
+            <div className="flex bg-slate-100 p-1 rounded-lg w-max md:w-auto">
+                <button onClick={() => setActiveView('cashier')} className={`px-4 py-1.5 rounded-md text-sm font-bold whitespace-nowrap transition-all ${activeView === 'cashier' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Mesin Kasir</button>
+                <button onClick={() => setActiveView('transactions')} className={`px-4 py-1.5 rounded-md text-sm font-bold whitespace-nowrap transition-all ${activeView === 'transactions' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Riwayat Transaksi</button>
+                <button onClick={() => setActiveView('shifts')} className={`px-4 py-1.5 rounded-md text-sm font-bold whitespace-nowrap transition-all ${activeView === 'shifts' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Riwayat Shift</button>
+                <button onClick={() => setActiveView('analysis')} className={`px-4 py-1.5 rounded-md text-sm font-bold whitespace-nowrap transition-all ${activeView === 'analysis' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>POS Analysis</button>
+            </div>
+         </div>
+
+         {/* Kanan: Tampilan Status & Tombol Kasir (Khusus Laptop) */}
+         <div className="hidden md:flex items-center gap-3">
+             {isShiftOpen && (<div className="flex items-center gap-4 text-xs font-medium text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200"><span className="flex items-center gap-1"><User size={14} className="text-blue-500"/> {shiftData.cashierName}</span><span className="w-px h-3 bg-slate-300"></span><span className="flex items-center gap-1"><Clock size={14} className="text-amber-500"/> {shiftData.shiftName}</span></div>)}
+             {isShiftOpen ? <button onClick={() => setShowCloseShiftModal(true)} className="px-4 py-2 rounded-lg text-xs font-bold bg-rose-100 text-rose-700 hover:bg-rose-200">Tutup Shift</button> : <button onClick={() => setShowShiftModal(true)} className="px-4 py-2 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-700 hover:bg-emerald-200">Buka Kasir</button>}
+         </div>
+
       </div>
 
       {/* VIEW 1: CASHIER MACHINE */}
