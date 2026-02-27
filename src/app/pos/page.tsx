@@ -187,6 +187,9 @@ export default function PosPage() {
         const rawMovements = processSheetData(apiData.movements);
         const users = processSheetData(apiData.users); 
         const shifts = processSheetData(apiData.shifts); 
+        
+        // [BARU] Menyedot riwayat transaksi Cloud (termasuk data tgl 24-25 Feb)
+        const rawCloudTrx = processSheetData(apiData.posHistory);
 
         if (apiData.receipt) setReceiptConfig(apiData.receipt);
 
@@ -197,6 +200,33 @@ export default function PosPage() {
 
         if (shifts.length > 0) setMasterShifts(shifts);
         else setMasterShifts([{Shift_Name: 'Pagi', Start_Time: '08:00', End_Time: '16:00'}, {Shift_Name: 'Sore', Start_Time: '16:00', End_Time: '22:00'}]);
+
+        // [BARU] Mapping data Excel Cloud ke format JSON React
+        if (rawCloudTrx.length > 0) {
+            const parsedCloudTrx = rawCloudTrx.map((row: any) => {
+                // Parse items string kembali menjadi array JSON
+                let itemsArray = [];
+                try { itemsArray = JSON.parse(row.Items || '[]'); } catch(e) {}
+                
+                return {
+                    id: row.ID,
+                    date: row.Date,
+                    timestamp: row.Timestamp,
+                    total: parseFloat(row.Total) || 0,
+                    paymentMethod: row.Payment_Method,
+                    amountPaid: parseFloat(row.Amount_Paid) || 0,
+                    change: parseFloat(row.Change) || 0,
+                    cashier: row.Cashier,
+                    shift: row.Shift,
+                    shiftId: row.Shift_ID,
+                    items: itemsArray,
+                    isCloud: true // Penanda bahwa ini data dari Google Sheets
+                };
+            });
+            
+            // Urutkan dari yang terbaru (reverse) dan masukkan ke state Cloud Transaksi
+            setCloudTransactions(parsedCloudTrx.reverse());
+        }
 
         const stockMap: Record<string, number> = {};
         rawProducts.forEach((p: any) => {
@@ -211,7 +241,9 @@ export default function PosPage() {
              }
         });
         setCalculatedStockMap(stockMap); 
-    } catch (err) {}
+    } catch (err) {
+        console.error("Gagal parsing data awal:", err);
+    }
   }, [apiData]);
 
   // --- HELPER ---
@@ -704,13 +736,99 @@ export default function PosPage() {
       </div>
 
       {/* VIEW 1: CASHIER MACHINE */}
-      {activeView === 'cashier' && (<div className="flex-1 flex gap-4 overflow-hidden print:hidden"><div className="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden"><div className="p-4 border-b border-slate-100 space-y-3"><div className="flex gap-2"><div className="relative flex-1"><Search className="absolute left-3 top-2.5 text-slate-400" size={18}/><input type="text" placeholder="Cari Produk..." className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}/></div></div><div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">{categories.map(c => (<button key={c} onClick={() => setActiveCategory(c as string)} className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeCategory === c ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{c as string}</button>))}</div></div><div className="flex-1 overflow-y-auto p-4 bg-slate-50">{loading ? <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400"/></div> : <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">{filteredProducts.map((prod, i) => { 
-      const promo = getProductPromo(prod.SKU, parseInt(prod.Sell_Price_List)||0); 
-      const liveStock = getLiveStock(prod);
-      const isJasa = ['Jasa', 'Service'].includes(prod.Category);
-      return (<div key={i} onClick={() => addToCart(prod)} className={`bg-white p-3 rounded-xl border border-slate-200 shadow-sm cursor-pointer hover:border-blue-500 hover:shadow-md transition-all flex flex-col justify-between h-full relative overflow-hidden group ${!isJasa && liveStock <= 0 ? 'opacity-60 grayscale' : ''}`}>
-          {!isJasa && (<div className={`absolute top-2 left-2 px-2 py-0.5 rounded text-[10px] font-bold z-10 flex items-center gap-1 ${liveStock > 10 ? 'bg-emerald-100 text-emerald-700' : liveStock > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'}`}><Box size={10}/> {liveStock > 0 ? `${liveStock} Stok` : 'Habis'}</div>)}
-          <div><div className="text-[10px] text-slate-400 mb-1 mt-6">{prod.Category}</div><div className="font-bold text-slate-800 text-sm leading-tight mb-2 line-clamp-2">{prod.Product_Name}</div></div><div className="mt-auto">{promo.hasPromo ? (<div className="flex flex-col"><span className="text-[10px] text-slate-400 line-through">{fmtMoney(parseInt(prod.Sell_Price_List))}</span><span className="text-rose-600 font-bold">{fmtMoney(promo.finalPrice)}</span></div>) : (<div className="text-blue-600 font-bold">{fmtMoney(parseInt(prod.Sell_Price_List))}</div>)}</div></div>); })}</div>}</div></div><div className="w-[350px] bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden"><div className="p-4 border-b border-slate-100 bg-slate-50"><h2 className="font-bold text-slate-800 flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h2></div><div className="flex-1 overflow-y-auto p-4 space-y-3">{cart.length === 0 ? (<div className="text-center text-slate-400 mt-10 flex flex-col items-center"><ShoppingCart size={40} className="mb-2 opacity-20"/><p className="text-sm">Keranjang Kosong</p></div>) : cart.map((item, i) => (<div key={i} className="flex justify-between items-start border-b border-slate-100 pb-2"><div className="flex-1"><div className="text-sm font-bold text-slate-800">{item.name}</div><div className="text-xs text-blue-600">{fmtMoney(item.price)}</div></div><div className="flex items-center gap-3"><div className="flex items-center gap-2 bg-slate-100 rounded-lg px-1"><button onClick={() => updateQty(item.sku, -1)} className="p-1 text-slate-500 hover:text-rose-600 font-bold">-</button><span className="text-xs font-bold w-4 text-center">{item.qty}</span><button onClick={() => updateQty(item.sku, 1)} className="p-1 text-slate-500 hover:text-emerald-600 font-bold">+</button></div><button onClick={() => removeFromCart(item.sku)} className="text-slate-300 hover:text-rose-500"><Trash2 size={16}/></button></div></div>))}</div><div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3"><div className="flex justify-between text-lg font-bold text-slate-900"><span>Total</span><span>{fmtMoney(cartTotal)}</span></div><button onClick={() => cartTotal > 0 && setShowPaymentModal(true)} disabled={cartTotal === 0} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all">Bayar Sekarang</button></div></div></div>)}
+      {activeView === 'cashier' && (
+        // [FIX] Mengubah flex biasa menjadi flex-col untuk HP, dan lg:flex-row untuk Laptop
+        <div className="flex-1 flex flex-col lg:flex-row gap-4 overflow-hidden print:hidden">
+            
+            {/* PANEL PRODUK (Di Kiri pada Laptop, Di Atas pada HP) */}
+            <div className="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-slate-100 space-y-3">
+                    <div className="flex gap-2">
+                        <div className="relative flex-1">
+                            <Search className="absolute left-3 top-2.5 text-slate-400" size={18}/>
+                            <input type="text" placeholder="Cari Produk..." className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}/>
+                        </div>
+                    </div>
+                    <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">
+                        {categories.map(c => (
+                            <button key={c} onClick={() => setActiveCategory(c as string)} className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeCategory === c ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{c as string}</button>
+                        ))}
+                    </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 bg-slate-50">
+                    {loading ? (
+                        <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400"/></div>
+                    ) : (
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                            {filteredProducts.map((prod, i) => { 
+                                const promo = getProductPromo(prod.SKU, parseInt(prod.Sell_Price_List)||0); 
+                                const liveStock = getLiveStock(prod);
+                                const isJasa = ['Jasa', 'Service'].includes(prod.Category);
+                                return (
+                                    <div key={i} onClick={() => addToCart(prod)} className={`bg-white p-3 rounded-xl border border-slate-200 shadow-sm cursor-pointer hover:border-blue-500 hover:shadow-md transition-all flex flex-col justify-between h-full relative overflow-hidden group ${!isJasa && liveStock <= 0 ? 'opacity-60 grayscale' : ''}`}>
+                                        {!isJasa && (<div className={`absolute top-2 left-2 px-2 py-0.5 rounded text-[10px] font-bold z-10 flex items-center gap-1 ${liveStock > 10 ? 'bg-emerald-100 text-emerald-700' : liveStock > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'}`}><Box size={10}/> {liveStock > 0 ? `${liveStock} Stok` : 'Habis'}</div>)}
+                                        <div>
+                                            <div className="text-[10px] text-slate-400 mb-1 mt-6">{prod.Category}</div>
+                                            <div className="font-bold text-slate-800 text-sm leading-tight mb-2 line-clamp-2">{prod.Product_Name}</div>
+                                        </div>
+                                        <div className="mt-auto">
+                                            {promo.hasPromo ? (
+                                                <div className="flex flex-col"><span className="text-[10px] text-slate-400 line-through">{fmtMoney(parseInt(prod.Sell_Price_List))}</span><span className="text-rose-600 font-bold">{fmtMoney(promo.finalPrice)}</span></div>
+                                            ) : (
+                                                <div className="text-blue-600 font-bold">{fmtMoney(parseInt(prod.Sell_Price_List))}</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ); 
+                            })}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* PANEL KERANJANG (Di Kanan pada Laptop, Di Bawah pada HP) */}
+            {/* [FIX] Menambahkan w-full untuk HP, h-[45%] agar di HP mengambil 45% tinggi layar, dan flex-shrink-0 agar tidak menyusut */}
+            <div className="w-full lg:w-[350px] h-[45%] lg:h-full flex-shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+                <div className="p-4 border-b border-slate-100 bg-slate-50">
+                    <h2 className="font-bold text-slate-800 flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h2>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                    {cart.length === 0 ? (
+                        <div className="text-center text-slate-400 mt-6 flex flex-col items-center">
+                            <ShoppingCart size={40} className="mb-2 opacity-20"/>
+                            <p className="text-sm">Keranjang Kosong</p>
+                        </div>
+                    ) : (
+                        cart.map((item, i) => (
+                            <div key={i} className="flex justify-between items-start border-b border-slate-100 pb-2">
+                                <div className="flex-1">
+                                    <div className="text-sm font-bold text-slate-800">{item.name}</div>
+                                    <div className="text-xs text-blue-600">{fmtMoney(item.price)}</div>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-1">
+                                        <button onClick={() => updateQty(item.sku, -1)} className="p-1 text-slate-500 hover:text-rose-600 font-bold">-</button>
+                                        <span className="text-xs font-bold w-4 text-center">{item.qty}</span>
+                                        <button onClick={() => updateQty(item.sku, 1)} className="p-1 text-slate-500 hover:text-emerald-600 font-bold">+</button>
+                                    </div>
+                                    <button onClick={() => removeFromCart(item.sku)} className="text-slate-300 hover:text-rose-500"><Trash2 size={16}/></button>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+                <div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3">
+                    <div className="flex justify-between text-lg font-bold text-slate-900">
+                        <span>Total</span><span>{fmtMoney(cartTotal)}</span>
+                    </div>
+                    <button onClick={() => cartTotal > 0 && setShowPaymentModal(true)} disabled={cartTotal === 0} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all">
+                        Bayar Sekarang
+                    </button>
+                </div>
+            </div>
+            
+        </div>
+      )}
       
       {/* VIEW 2: TRANSACTIONS */}
       {activeView === 'transactions' && (
