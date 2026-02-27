@@ -974,20 +974,32 @@ export default function PosPage() {
       {/* --- VIEW 4: POS ANALYSIS --- */}
       {activeView === 'analysis' && (
         <div className="flex-1 overflow-hidden flex flex-col print:hidden space-y-4">
+            
             {/* Filter Bar */}
-            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                     <h2 className="font-bold text-slate-800 flex items-center gap-2"><BarChart3 className="text-blue-600"/> POS Analysis (Daily)</h2>
-                    <p className="text-xs text-slate-500 mt-1">Data filter: {dateRange.start} s/d {dateRange.end} | Sumber Produk SKU: {viewSource.toUpperCase()}</p>
+                    <p className="text-xs text-slate-500 mt-1">Data filter: {dateRange.start} s/d {dateRange.end} | Sumber Data: {viewSource === 'cloud' ? 'Google Sheets (Cloud)' : 'Device Memory (Local)'}</p>
                 </div>
-                <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
-                    <Calendar size={14} className="text-slate-400"/>
-                    <span className="text-xs font-bold text-slate-500">From</span>
-                    <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
-                    <span className="text-xs font-bold text-slate-500">To</span>
-                    <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                
+                <div className="flex flex-wrap items-center gap-3">
+                    {/* [BARU] Tombol Toggle Local/Cloud langsung di dalam POS Analysis */}
+                    <div className="flex items-center bg-slate-100 p-1 rounded-lg">
+                      <button onClick={() => setViewSource('local')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'local' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}><Database size={14}/> Lokal</button>
+                      <button onClick={() => setViewSource('cloud')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'cloud' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500'}`}><Laptop2 size={14}/> Cloud</button>
+                    </div>
+
+                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
+                        <Calendar size={14} className="text-slate-400"/>
+                        <span className="text-xs font-bold text-slate-500 hidden md:inline">From</span>
+                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
+                        <span className="text-xs font-bold text-slate-500">To</span>
+                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                    </div>
                 </div>
             </div>
+
+            {/* Sisa kode kolom kiri dan kanan (Reconciliation & SKU) tetap sama persis di bawah ini... */}
 
             <div className="flex-1 overflow-y-auto flex gap-4 pb-4">
                 {/* Kolom Kiri: Payment Reconciliation & Marketplace */}
