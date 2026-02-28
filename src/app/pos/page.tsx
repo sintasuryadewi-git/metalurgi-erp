@@ -310,6 +310,39 @@ export default function PosPage() {
       }
   };
 
+  // --- [BARU] FUNGSI FILTER CEPAT ---
+  const handleQuickFilter = (preset: string) => {
+      const dateNow = new Date();
+      const formatDate = (date: Date) => {
+          const y = date.getFullYear();
+          const m = String(date.getMonth() + 1).padStart(2, '0');
+          const d = String(date.getDate()).padStart(2, '0');
+          return `${y}-${m}-${d}`;
+      };
+
+      let start = new Date(dateNow);
+      let end = new Date(dateNow);
+
+      if (preset === 'yesterday') {
+          start.setDate(dateNow.getDate() - 1);
+          end.setDate(dateNow.getDate() - 1);
+      } else if (preset === 'thisWeek') {
+          const day = dateNow.getDay();
+          const diff = dateNow.getDate() - day + (day === 0 ? -6 : 1);
+          start.setDate(diff);
+          end = new Date(start);
+          end.setDate(start.getDate() + 6);
+      } else if (preset === 'thisMonth') {
+          start = new Date(dateNow.getFullYear(), dateNow.getMonth(), 1);
+          end = new Date(dateNow.getFullYear(), dateNow.getMonth() + 1, 0);
+      } else if (preset === 'lastMonth') {
+          start = new Date(dateNow.getFullYear(), dateNow.getMonth() - 1, 1);
+          end = new Date(dateNow.getFullYear(), dateNow.getMonth(), 0);
+      }
+
+      setDateRange({ start: formatDate(start), end: formatDate(end) });
+  };
+
 
   const filteredHistory = useMemo(() => {
       const sourceData = viewSource === 'local' ? allTransactions : cloudTransactions;
@@ -351,7 +384,6 @@ export default function PosPage() {
       const start = new Date(dateRange.start); start.setHours(0,0,0,0);
       const end = new Date(dateRange.end); end.setHours(23,59,59,999);
 
-      // 1. RECONCILIATION: Fokus ke data Cloud + Unit/Pcs
       const methods = ['Cash', 'QRIS', 'Transfer', 'ShopeeFood', 'GrabFood', 'GoFood'];
       const reconcileStats: any[] = [];
       let totalCloud = 0;
@@ -377,7 +409,6 @@ export default function PosPage() {
           totalCloudQty += cQty;
       });
 
-      // 2. SKU PERFORMANCE
       const skuStats: Record<string, { name: string, qty: number, total: number }> = {};
       const activeTrx = viewSource === 'local' ? allTransactions.filter(t => new Date(t.date) >= start && new Date(t.date) <= end) : cldTrx;
       
@@ -396,7 +427,6 @@ export default function PosPage() {
       const grandTotalQty = rankedSKU.reduce((sum, item) => sum + item.qty, 0);
       const grandTotalAmount = rankedSKU.reduce((sum, item) => sum + item.total, 0);
 
-      // 3. MARKETPLACE EST. PROFIT -> PENCAIRAN MARKETPLACE
       const cloudShopee = cldTrx.filter(t => t.paymentMethod === 'ShopeeFood').reduce((a,b) => a + (b.total||0), 0);
       const cloudGrab = cldTrx.filter(t => t.paymentMethod === 'GrabFood').reduce((a,b) => a + (b.total||0), 0);
       const cloudGoFood = cldTrx.filter(t => t.paymentMethod === 'GoFood').reduce((a,b) => a + (b.total||0), 0);
@@ -973,25 +1003,57 @@ export default function PosPage() {
       {activeView === 'analysis' && (
         <div className="flex-1 overflow-hidden flex flex-col print:hidden space-y-4">
             
-            {/* Filter Bar */}
-            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            {/* Filter Bar dengan Tombol Quick Filter */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-start justify-between gap-4">
                 <div>
                     <h2 className="font-bold text-slate-800 flex items-center gap-2"><BarChart3 className="text-blue-600"/> POS Analysis (Daily)</h2>
-                    <p className="text-xs text-slate-500 mt-1">Data filter: {dateRange.start} s/d {dateRange.end} | Sumber Data: {viewSource === 'cloud' ? 'Google Sheets (Cloud)' : 'Device Memory (Local)'}</p>
+                    <p className="text-xs text-slate-500 mt-1 mb-3">Data filter: {dateRange.start} s/d {dateRange.end} | Sumber Data: {viewSource === 'cloud' ? 'Google Sheets (Cloud)' : 'Device Memory (Local)'}</p>
+                    
+                    {/* Tombol Quick Filter */}
+                    <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar w-full max-w-[90vw] md:w-max">
+                        {['Hari ini', 'Kemarin', 'Minggu ini', 'Bulan ini', 'Bulan lalu'].map((label, i) => {
+                            const keys = ['today', 'yesterday', 'thisWeek', 'thisMonth', 'lastMonth'];
+                            return (
+                                <button key={i} onClick={() => handleQuickFilter(keys[i])} className="px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-full text-[10px] font-bold whitespace-nowrap transition-colors border border-blue-100 shadow-sm">
+                                    {label}
+                                </button>
+                            );
+                        })}
+                    </div>
                 </div>
                 
                 <div className="flex flex-wrap items-center gap-3">
+                    {/* Toggle Source */}
                     <div className="flex items-center bg-slate-100 p-1 rounded-lg">
                       <button onClick={() => setViewSource('local')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'local' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}><Database size={14}/> Lokal</button>
                       <button onClick={() => setViewSource('cloud')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'cloud' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500'}`}><Laptop2 size={14}/> Cloud</button>
                     </div>
 
+                    {/* [BARU] Search by Month Picker */}
+                    <div className="flex items-center gap-2 bg-blue-50 px-3 py-2 rounded-lg border border-blue-200">
+                        <Calendar size={14} className="text-blue-500"/>
+                        <span className="text-[10px] font-bold text-blue-700 uppercase hidden sm:block">Bulan:</span>
+                        <input 
+                            type="month" 
+                            className="text-xs font-bold text-blue-800 bg-transparent outline-none cursor-pointer"
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                if (!val) return;
+                                const [y, m] = val.split('-');
+                                const start = new Date(parseInt(y), parseInt(m) - 1, 1);
+                                const end = new Date(parseInt(y), parseInt(m), 0);
+                                const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                                setDateRange({ start: fmt(start), end: fmt(end) });
+                            }}
+                        />
+                    </div>
+
+                    {/* Custom Range */}
                     <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
-                        <Calendar size={14} className="text-slate-400"/>
-                        <span className="text-xs font-bold text-slate-500 hidden md:inline">From</span>
-                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
-                        <span className="text-xs font-bold text-slate-500">To</span>
-                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase hidden md:block">Kustom:</span>
+                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer w-auto" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
+                        <span className="text-xs font-bold text-slate-400">-</span>
+                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer w-auto" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
                     </div>
                 </div>
             </div>
@@ -1068,7 +1130,7 @@ export default function PosPage() {
                     </div>
                 </div>
 
-                {/* --- [FIX HP] Kolom Kanan: SKU Breakdown ditambahkan min-h-[500px] --- */}
+                {/* Kolom Kanan: SKU Breakdown */}
                 <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden min-h-[500px] md:min-h-0">
                     <div className="p-4 border-b border-slate-100 bg-slate-50">
                         <h3 className="font-bold text-slate-800 flex items-center gap-2"><Box size={16}/> Daily SKU Performance</h3>
