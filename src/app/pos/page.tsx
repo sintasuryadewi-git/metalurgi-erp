@@ -108,7 +108,7 @@ export default function PosPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
 
-  // --- [MODIFIED] DATA FETCHING ---
+  // --- DATA FETCHING ---
   const { data: apiData, loading } = useFetch<any>('/api/pos');
   const { data: glApiData } = useFetch<any>('/api/general-ledger');
 
@@ -997,7 +997,7 @@ export default function PosPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto flex flex-col md:flex-row gap-4 pb-4">
-                {/* --- [DIREVISI] KOLOM KIRI: Payment Reconciliation & Marketplace --- */}
+                {/* KOLOM KIRI: Payment Reconciliation & Marketplace */}
                 <div className="w-full md:w-[45%] flex flex-col gap-4">
                     
                     {/* RECONCILIATION TABLE */}
@@ -1068,8 +1068,8 @@ export default function PosPage() {
                     </div>
                 </div>
 
-                {/* Kolom Kanan: SKU Breakdown */}
-                <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+                {/* --- [FIX HP] Kolom Kanan: SKU Breakdown ditambahkan min-h-[500px] --- */}
+                <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden min-h-[500px] md:min-h-0">
                     <div className="p-4 border-b border-slate-100 bg-slate-50">
                         <h3 className="font-bold text-slate-800 flex items-center gap-2"><Box size={16}/> Daily SKU Performance</h3>
                     </div>
