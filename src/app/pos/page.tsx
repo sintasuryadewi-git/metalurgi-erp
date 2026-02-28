@@ -310,7 +310,7 @@ export default function PosPage() {
       }
   };
 
-  // --- [BARU] FUNGSI FILTER CEPAT ---
+  // --- FUNGSI FILTER CEPAT ---
   const handleQuickFilter = (preset: string) => {
       const dateNow = new Date();
       const formatDate = (date: Date) => {
@@ -754,20 +754,17 @@ export default function PosPage() {
       {/* TOP NAVIGATION */}
       <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm print:hidden flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-0">
          
-         {/* Kiri/Atas: Logo & Tombol Kasir (Khusus Mobile) */}
          <div className="flex justify-between items-center w-full md:w-auto md:gap-4">
             <h1 className="text-lg md:text-xl font-bold text-slate-900 flex items-center gap-2">
                <Store className="text-blue-600"/> Metalurgi POS
             </h1>
             
-            {/* Tampilan Status Shift khusus layar HP agar rapi */}
             <div className="flex md:hidden items-center gap-2">
                 {isShiftOpen && (<div className="flex items-center gap-1 text-[10px] font-medium text-slate-600 bg-slate-50 px-2 py-1 rounded-md border border-slate-200"><User size={10} className="text-blue-500"/> {shiftData.cashierName}</div>)}
                 {isShiftOpen ? <button onClick={() => setShowCloseShiftModal(true)} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-100 text-rose-700">Tutup</button> : <button onClick={() => setShowShiftModal(true)} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-700">Buka</button>}
             </div>
          </div>
 
-         {/* Tengah: Menu Tab Bisa Digeser di HP (Scrollable) */}
          <div className="w-full md:w-auto overflow-x-auto custom-scrollbar pb-1 md:pb-0">
             <div className="flex bg-slate-100 p-1 rounded-lg w-max md:w-auto">
                 <button onClick={() => setActiveView('cashier')} className={`px-4 py-1.5 rounded-md text-sm font-bold whitespace-nowrap transition-all ${activeView === 'cashier' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Mesin Kasir</button>
@@ -777,7 +774,6 @@ export default function PosPage() {
             </div>
          </div>
 
-         {/* Kanan: Tampilan Status & Tombol Kasir (Khusus Laptop) */}
          <div className="hidden md:flex items-center gap-3">
              {isShiftOpen && (<div className="flex items-center gap-4 text-xs font-medium text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200"><span className="flex items-center gap-1"><User size={14} className="text-blue-500"/> {shiftData.cashierName}</span><span className="w-px h-3 bg-slate-300"></span><span className="flex items-center gap-1"><Clock size={14} className="text-amber-500"/> {shiftData.shiftName}</span></div>)}
              {isShiftOpen ? <button onClick={() => setShowCloseShiftModal(true)} className="px-4 py-2 rounded-lg text-xs font-bold bg-rose-100 text-rose-700 hover:bg-rose-200">Tutup Shift</button> : <button onClick={() => setShowShiftModal(true)} className="px-4 py-2 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-700 hover:bg-emerald-200">Buka Kasir</button>}
@@ -788,8 +784,6 @@ export default function PosPage() {
       {/* VIEW 1: CASHIER MACHINE */}
       {activeView === 'cashier' && (
         <div className="flex-1 flex flex-col lg:flex-row gap-4 overflow-hidden print:hidden">
-            
-            {/* PANEL PRODUK (Di Kiri pada Laptop, Di Atas pada HP) */}
             <div className="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="p-4 border-b border-slate-100 space-y-3">
                     <div className="flex gap-2">
@@ -835,7 +829,6 @@ export default function PosPage() {
                 </div>
             </div>
 
-            {/* PANEL KERANJANG (Di Kanan pada Laptop, Di Bawah pada HP) */}
             <div className="w-full lg:w-[350px] h-[45%] lg:h-full flex-shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
                 <div className="p-4 border-b border-slate-100 bg-slate-50">
                     <h2 className="font-bold text-slate-800 flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h2>
@@ -874,7 +867,6 @@ export default function PosPage() {
                     </button>
                 </div>
             </div>
-            
         </div>
       )}
       
@@ -887,9 +879,9 @@ export default function PosPage() {
                         <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
                             <Calendar size={14} className="text-slate-400"/>
                             <span className="text-xs font-bold text-slate-500">From</span>
-                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
+                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.start || ''} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
                             <span className="text-xs font-bold text-slate-500">To</span>
-                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                            <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer" value={dateRange.end || ''} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
                         </div>
                         <select className="text-xs p-2 rounded-lg border border-slate-200" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}>
                             <option value="all">Semua Shift</option>{masterShifts.map((s,i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name}</option>)}
@@ -1003,7 +995,7 @@ export default function PosPage() {
       {activeView === 'analysis' && (
         <div className="flex-1 overflow-hidden flex flex-col print:hidden space-y-4">
             
-            {/* Filter Bar dengan Tombol Quick Filter */}
+            {/* Filter Bar */}
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-start justify-between gap-4">
                 <div>
                     <h2 className="font-bold text-slate-800 flex items-center gap-2"><BarChart3 className="text-blue-600"/> POS Analysis (Daily)</h2>
@@ -1023,37 +1015,62 @@ export default function PosPage() {
                 </div>
                 
                 <div className="flex flex-wrap items-center gap-3">
-                    {/* Toggle Source */}
-                    <div className="flex items-center bg-slate-100 p-1 rounded-lg">
-                      <button onClick={() => setViewSource('local')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'local' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}><Database size={14}/> Lokal</button>
-                      <button onClick={() => setViewSource('cloud')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'cloud' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500'}`}><Laptop2 size={14}/> Cloud</button>
-                    </div>
+                    
+                    {/* [FIX] KOMBO SELECT BULAN & TAHUN NATIVE (Sangat aman untuk semua browser & HP) */}
+                    {(() => {
+                        // Membaca tanggal saat ini di state untuk dicocokkan ke dropdown
+                        const [startYear, startMonth] = (dateRange.start || new Date().toISOString().split('T')[0]).split('-');
+                        const yearNum = parseInt(startYear) || new Date().getFullYear();
+                        
+                        return (
+                            <div className="flex items-center gap-1 bg-blue-50 px-2 py-1.5 rounded-lg border border-blue-200 shadow-sm">
+                                <Calendar size={14} className="text-blue-500 ml-1"/>
+                                <span className="text-[10px] font-bold text-blue-700 uppercase hidden sm:block ml-1">Pilih Bulan:</span>
+                                
+                                {/* Select Bulan */}
+                                <select 
+                                    className="text-xs font-bold text-blue-800 bg-transparent outline-none cursor-pointer px-1"
+                                    value={startMonth}
+                                    onChange={(e) => {
+                                        const m = e.target.value;
+                                        const start = new Date(yearNum, parseInt(m) - 1, 1);
+                                        const end = new Date(yearNum, parseInt(m), 0);
+                                        const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                                        setDateRange({ start: fmt(start), end: fmt(end) });
+                                    }}
+                                >
+                                    <option value="01">Jan</option><option value="02">Feb</option><option value="03">Mar</option>
+                                    <option value="04">Apr</option><option value="05">Mei</option><option value="06">Jun</option>
+                                    <option value="07">Jul</option><option value="08">Agu</option><option value="09">Sep</option>
+                                    <option value="10">Okt</option><option value="11">Nov</option><option value="12">Des</option>
+                                </select>
 
-                    {/* [BARU] Search by Month Picker */}
-                    <div className="flex items-center gap-2 bg-blue-50 px-3 py-2 rounded-lg border border-blue-200">
-                        <Calendar size={14} className="text-blue-500"/>
-                        <span className="text-[10px] font-bold text-blue-700 uppercase hidden sm:block">Bulan:</span>
-                        <input 
-                            type="month" 
-                            className="text-xs font-bold text-blue-800 bg-transparent outline-none cursor-pointer"
-                            onChange={(e) => {
-                                const val = e.target.value;
-                                if (!val) return;
-                                const [y, m] = val.split('-');
-                                const start = new Date(parseInt(y), parseInt(m) - 1, 1);
-                                const end = new Date(parseInt(y), parseInt(m), 0);
-                                const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-                                setDateRange({ start: fmt(start), end: fmt(end) });
-                            }}
-                        />
-                    </div>
+                                {/* Select Tahun */}
+                                <select 
+                                    className="text-xs font-bold text-blue-800 bg-transparent outline-none cursor-pointer pr-1"
+                                    value={startYear}
+                                    onChange={(e) => {
+                                        const y = e.target.value;
+                                        const start = new Date(parseInt(y), parseInt(startMonth) - 1, 1);
+                                        const end = new Date(parseInt(y), parseInt(startMonth), 0);
+                                        const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                                        setDateRange({ start: fmt(start), end: fmt(end) });
+                                    }}
+                                >
+                                    {[yearNum + 1, yearNum, yearNum - 1, yearNum - 2].map(y => (
+                                        <option key={y} value={y}>{y}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        )
+                    })()}
 
                     {/* Custom Range */}
-                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
+                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200 shadow-sm">
                         <span className="text-[10px] font-bold text-slate-400 uppercase hidden md:block">Kustom:</span>
-                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer w-auto" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
+                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer w-auto" value={dateRange.start || ''} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
                         <span className="text-xs font-bold text-slate-400">-</span>
-                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer w-auto" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+                        <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer w-auto" value={dateRange.end || ''} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
                     </div>
                 </div>
             </div>
@@ -1169,7 +1186,7 @@ export default function PosPage() {
       )}
 
       {/* MODALS & POPUPS TETAP SAMA */}
-      {showShiftModal && (<div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6 text-center animate-in zoom-in-95"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4"><Store size={32}/></div><h3 className="font-bold text-xl text-slate-900 mb-2">Buka Shift Kasir</h3><div className="space-y-3 text-left"><div><label className="text-xs font-bold text-slate-500">Pilih Kasir</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedCashier(e.target.value)}><option value="">-- Pilih --</option>{masterCashiers.map((c, i) => <option key={i} value={c.Name}>{c.Name}</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Pilih Shift</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedShift(e.target.value)}><option value="">-- Pilih --</option>{masterShifts.map((s, i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name} ({s.Start_Time || '00:00'}-{s.End_Time || '23:59'})</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Saldo Awal (Modal)</label><input type="number" className="w-full p-2 border rounded-lg mt-1" placeholder="Rp" onChange={e => setStartCashInput(parseInt(e.target.value)||0)}/></div><button onClick={handleOpenShift} className="w-full py-3 mt-2 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">Buka Toko</button></div></div></div>)}
+      {showShiftModal && (<div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6 text-center animate-in zoom-in-95"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4"><Store size={32}/></div><h3 className="font-bold text-xl text-slate-900 mb-2">Buka Shift Kasir</h3><div className="space-y-3 text-left"><div><label className="text-xs font-bold text-slate-500">Pilih Kasir</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedCashier(e.target.value)}><option value="">-- Pilih --</option>{masterCashiers.map((c, i) => <option key={i} value={c.Name}>{c.Name}</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Pilih Shift</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedShift(e.target.value)}><option value="">-- Pilih --</option>{masterShifts.map((s, i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name} ({s.Start_Time || '00:00'}-{s.End_Time || '23:59'})</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Saldo Awal (Modal)</label><input type="number" className="w-full p-2 border rounded-lg mt-1" placeholder="Rp" value={startCashInput === 0 ? '' : startCashInput} onChange={e => setStartCashInput(parseInt(e.target.value)||0)}/></div><button onClick={handleOpenShift} className="w-full py-3 mt-2 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">Buka Toko</button></div></div></div>)}
       
       {showCloseShiftModal && (<div className="fixed inset-0 bg-slate-900/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden">
         <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden animate-in zoom-in-95 max-h-[95vh] flex flex-col">
@@ -1248,11 +1265,11 @@ export default function PosPage() {
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-500 uppercase">Cash Out / Keluar</label>
-                                    <input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm mt-1 text-rose-600 font-bold bg-white" placeholder="0" value={cashOutInput || ''} onChange={e => setCashOutInput(parseInt(e.target.value)||0)}/>
+                                    <input type="number" className="w-full p-2 border border-slate-300 rounded-lg text-sm mt-1 text-rose-600 font-bold bg-white" placeholder="0" value={cashOutInput === 0 ? '' : cashOutInput} onChange={e => setCashOutInput(parseInt(e.target.value)||0)}/>
                                 </div>
                                 <div>
                                     <label className="text-[10px] font-bold text-emerald-600 uppercase">Actual Cash (Laci)</label>
-                                    <input type="number" className="w-full p-2 border-2 border-emerald-300 bg-white rounded-lg text-sm mt-1 text-emerald-700 font-bold shadow-sm focus:ring-2 ring-emerald-200 outline-none" placeholder="Hitung Fisik" onChange={e => setEndCashInput(parseInt(e.target.value)||0)}/>
+                                    <input type="number" className="w-full p-2 border-2 border-emerald-300 bg-white rounded-lg text-sm mt-1 text-emerald-700 font-bold shadow-sm focus:ring-2 ring-emerald-200 outline-none" placeholder="Hitung Fisik" value={endCashInput === 0 ? '' : endCashInput} onChange={e => setEndCashInput(parseInt(e.target.value)||0)}/>
                                 </div>
                             </div>
                             
@@ -1299,7 +1316,7 @@ export default function PosPage() {
                       {paymentMethod === 'Cash' && (
                           <div>
                               <label className="block text-xs font-bold text-slate-500 mb-1">Uang Diterima</label>
-                              <input type="number" autoFocus className="w-full p-3 border border-slate-300 rounded-xl text-lg font-bold" value={amountPaid} onChange={e => setAmountPaid(parseInt(e.target.value) || 0)} placeholder="0"/>
+                              <input type="number" autoFocus className="w-full p-3 border border-slate-300 rounded-xl text-lg font-bold" value={amountPaid === 0 ? '' : amountPaid} onChange={e => setAmountPaid(parseInt(e.target.value) || 0)} placeholder="0"/>
                               <div className="flex gap-2 mt-2">
                                   {[cartTotal, 50000, 100000].map(amt => (
                                       <button key={amt} onClick={() => setAmountPaid(amt)} className="px-3 py-1 bg-slate-100 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-200">
