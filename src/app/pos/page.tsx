@@ -109,9 +109,7 @@ export default function PosPage() {
   const [activeCategory, setActiveCategory] = useState('All');
 
   // --- [MODIFIED] DATA FETCHING ---
-  // Kita menggunakan hook useFetch bawaan untuk memastikan token/identitas terkirim
   const { data: apiData, loading } = useFetch<any>('/api/pos');
-  // Memuat data GL di latar belakang menggunakan jalur yang sudah teruji keamanannya
   const { data: glApiData } = useFetch<any>('/api/general-ledger');
 
   const processSheetData = (rows: any[]) => {
@@ -187,8 +185,6 @@ export default function PosPage() {
         const rawMovements = processSheetData(apiData.movements);
         const users = processSheetData(apiData.users); 
         const shifts = processSheetData(apiData.shifts); 
-        
-        // [BARU] Menyedot riwayat transaksi Cloud (termasuk data tgl 24-25 Feb)
         const rawCloudTrx = processSheetData(apiData.posHistory);
 
         if (apiData.receipt) setReceiptConfig(apiData.receipt);
@@ -201,18 +197,16 @@ export default function PosPage() {
         if (shifts.length > 0) setMasterShifts(shifts);
         else setMasterShifts([{Shift_Name: 'Pagi', Start_Time: '08:00', End_Time: '16:00'}, {Shift_Name: 'Sore', Start_Time: '16:00', End_Time: '22:00'}]);
 
-        // [BARU] Mapping data Excel Cloud ke format JSON React
         if (rawCloudTrx.length > 0) {
             const parsedCloudTrx = rawCloudTrx.map((row: any) => {
-                // Parse items string kembali menjadi array JSON
                 let itemsArray = [];
-                try { itemsArray = JSON.parse(row.Items || '[]'); } catch(e) {}
+                try { itemsArray = JSON.parse(row.items_json || row.Items || '[]'); } catch(e) {}
                 
                 return {
                     id: row.ID,
                     date: row.Date,
                     timestamp: row.Timestamp,
-                    total: parseFloat(row.Total) || 0,
+                    total: parseFloat(row.Total_Amount || row.Total) || 0,
                     paymentMethod: row.Payment_Method,
                     amountPaid: parseFloat(row.Amount_Paid) || 0,
                     change: parseFloat(row.Change) || 0,
@@ -220,11 +214,9 @@ export default function PosPage() {
                     shift: row.Shift,
                     shiftId: row.Shift_ID,
                     items: itemsArray,
-                    isCloud: true // Penanda bahwa ini data dari Google Sheets
+                    isCloud: true 
                 };
             });
-            
-            // Urutkan dari yang terbaru (reverse) dan masukkan ke state Cloud Transaksi
             setCloudTransactions(parsedCloudTrx.reverse());
         }
 
@@ -282,15 +274,11 @@ export default function PosPage() {
     if (viewSource === 'cloud' && (activeView === 'transactions' || activeView === 'analysis')) fetchCloudData();
   }, [viewSource, activeView]);
 
-  // --- [MODIFIED] GL AUDIT LOGIC (Aman dari Auth Error) ---
   const runGLAudit = async () => {
       setIsAuditingGL(true);
-      
-      // Beri jeda UI agar terasa proses sinkronisasinya
       await new Promise(resolve => setTimeout(resolve, 600));
 
       try {
-          // Kita baca data GL dari hasil useFetch yang sudah aman di latar belakang
           if (!glApiData || !glApiData.gl) {
               alert("Data General Ledger belum siap atau gagal dimuat. Silakan refresh halaman (F5) dan coba lagi.");
               setIsAuditingGL(false);
@@ -298,7 +286,6 @@ export default function PosPage() {
           }
           
           const glRows = glApiData.gl || [];
-          // Index 6 adalah Ref_ID di General Ledger
           const glRefIds = new Set(glRows.slice(1).map((r:any) => String(r[6])));
           
           const missingIds: string[] = [];
@@ -364,29 +351,35 @@ export default function PosPage() {
       const start = new Date(dateRange.start); start.setHours(0,0,0,0);
       const end = new Date(dateRange.end); end.setHours(23,59,59,999);
 
-      // 1. RECONCILIATION: Local vs Cloud Data
+      // 1. RECONCILIATION: Fokus ke data Cloud + Unit/Pcs
       const methods = ['Cash', 'QRIS', 'Transfer', 'ShopeeFood', 'GrabFood', 'GoFood'];
       const reconcileStats: any[] = [];
-      let totalLocal = 0;
       let totalCloud = 0;
+      let totalCloudQty = 0;
 
-      const locTrx = allTransactions.filter(t => new Date(t.date) >= start && new Date(t.date) <= end);
       const cldTrx = cloudTransactions.filter(t => new Date(t.date) >= start && new Date(t.date) <= end);
 
       methods.forEach(m => {
-          const l = locTrx.filter(t => t.paymentMethod === m).reduce((a,b) => a + (b.total||0), 0);
-          const c = cldTrx.filter(t => t.paymentMethod === m).reduce((a,b) => a + (b.total||0), 0);
+          const trxs = cldTrx.filter(t => t.paymentMethod === m);
+          const c = trxs.reduce((a,b) => a + (b.total||0), 0);
           
-          if (l > 0 || c > 0) {
-              reconcileStats.push({ method: m, local: l, cloud: c, variance: l - c });
+          let cQty = 0;
+          trxs.forEach(trx => {
+              trx.items.forEach((item: any) => {
+                  cQty += (item.qty || 0);
+              });
+          });
+          
+          if (c > 0 || cQty > 0) {
+              reconcileStats.push({ method: m, cloud: c, qty: cQty });
           }
-          totalLocal += l;
           totalCloud += c;
+          totalCloudQty += cQty;
       });
 
       // 2. SKU PERFORMANCE
       const skuStats: Record<string, { name: string, qty: number, total: number }> = {};
-      const activeTrx = viewSource === 'local' ? locTrx : cldTrx;
+      const activeTrx = viewSource === 'local' ? allTransactions.filter(t => new Date(t.date) >= start && new Date(t.date) <= end) : cldTrx;
       
       activeTrx.forEach(trx => {
           trx.items.forEach((item: any) => {
@@ -403,21 +396,28 @@ export default function PosPage() {
       const grandTotalQty = rankedSKU.reduce((sum, item) => sum + item.qty, 0);
       const grandTotalAmount = rankedSKU.reduce((sum, item) => sum + item.total, 0);
 
-      // 3. MARKETPLACE EST. PROFIT
+      // 3. MARKETPLACE EST. PROFIT -> PENCAIRAN MARKETPLACE
       const cloudShopee = cldTrx.filter(t => t.paymentMethod === 'ShopeeFood').reduce((a,b) => a + (b.total||0), 0);
       const cloudGrab = cldTrx.filter(t => t.paymentMethod === 'GrabFood').reduce((a,b) => a + (b.total||0), 0);
       const cloudGoFood = cldTrx.filter(t => t.paymentMethod === 'GoFood').reduce((a,b) => a + (b.total||0), 0);
 
-      const estCommission = {
-          ShopeeFood: cloudShopee * MARKETPLACE_COMMISSION.ShopeeFood,
-          GrabFood: cloudGrab * MARKETPLACE_COMMISSION.GrabFood,
-          GoFood: cloudGoFood * MARKETPLACE_COMMISSION.GoFood,
-          GrossShopee: cloudShopee,
-          GrossGrab: cloudGrab,
-          GrossGoFood: cloudGoFood
-      };
+      const calcMp = (gross: number, commRate: number) => ({
+          Gross: gross,
+          Commission: gross * commRate,
+          Net: gross - (gross * commRate)
+      });
 
-      return { reconcileStats, totalLocal, totalCloud, rankedSKU, grandTotalQty, grandTotalAmount, estCommission };
+      const estCommission = {
+          Shopee: calcMp(cloudShopee, MARKETPLACE_COMMISSION.ShopeeFood),
+          Grab: calcMp(cloudGrab, MARKETPLACE_COMMISSION.GrabFood),
+          GoFood: calcMp(cloudGoFood, MARKETPLACE_COMMISSION.GoFood),
+          TotalGross: cloudShopee + cloudGrab + cloudGoFood,
+          TotalCommission: (cloudShopee * MARKETPLACE_COMMISSION.ShopeeFood) + (cloudGrab * MARKETPLACE_COMMISSION.GrabFood) + (cloudGoFood * MARKETPLACE_COMMISSION.GoFood)
+      };
+      
+      const TotalNet = estCommission.TotalGross - estCommission.TotalCommission;
+
+      return { reconcileStats, totalCloud, totalCloudQty, rankedSKU, grandTotalQty, grandTotalAmount, estCommission, TotalNet };
   }, [allTransactions, cloudTransactions, dateRange, viewSource]);
 
 
@@ -757,7 +757,6 @@ export default function PosPage() {
 
       {/* VIEW 1: CASHIER MACHINE */}
       {activeView === 'cashier' && (
-        // [FIX] Mengubah flex biasa menjadi flex-col untuk HP, dan lg:flex-row untuk Laptop
         <div className="flex-1 flex flex-col lg:flex-row gap-4 overflow-hidden print:hidden">
             
             {/* PANEL PRODUK (Di Kiri pada Laptop, Di Atas pada HP) */}
@@ -807,7 +806,6 @@ export default function PosPage() {
             </div>
 
             {/* PANEL KERANJANG (Di Kanan pada Laptop, Di Bawah pada HP) */}
-            {/* [FIX] Menambahkan w-full untuk HP, h-[45%] agar di HP mengambil 45% tinggi layar, dan flex-shrink-0 agar tidak menyusut */}
             <div className="w-full lg:w-[350px] h-[45%] lg:h-full flex-shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
                 <div className="p-4 border-b border-slate-100 bg-slate-50">
                     <h2 className="font-bold text-slate-800 flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h2>
@@ -983,7 +981,6 @@ export default function PosPage() {
                 </div>
                 
                 <div className="flex flex-wrap items-center gap-3">
-                    {/* [BARU] Tombol Toggle Local/Cloud langsung di dalam POS Analysis */}
                     <div className="flex items-center bg-slate-100 p-1 rounded-lg">
                       <button onClick={() => setViewSource('local')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'local' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}><Database size={14}/> Lokal</button>
                       <button onClick={() => setViewSource('cloud')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'cloud' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500'}`}><Laptop2 size={14}/> Cloud</button>
@@ -999,11 +996,9 @@ export default function PosPage() {
                 </div>
             </div>
 
-            {/* Sisa kode kolom kiri dan kanan (Reconciliation & SKU) tetap sama persis di bawah ini... */}
-
-            <div className="flex-1 overflow-y-auto flex gap-4 pb-4">
-                {/* Kolom Kiri: Payment Reconciliation & Marketplace */}
-                <div className="w-[45%] flex flex-col gap-4">
+            <div className="flex-1 overflow-y-auto flex flex-col md:flex-row gap-4 pb-4">
+                {/* --- [DIREVISI] KOLOM KIRI: Payment Reconciliation & Marketplace --- */}
+                <div className="w-full md:w-[45%] flex flex-col gap-4">
                     
                     {/* RECONCILIATION TABLE */}
                     <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col">
@@ -1013,57 +1008,63 @@ export default function PosPage() {
                                 <thead className="bg-slate-50 text-slate-500 border-b border-slate-100">
                                     <tr>
                                         <th className="p-2">Metode</th>
-                                        <th className="p-2 text-right">Local (Device)</th>
-                                        <th className="p-2 text-right">Cloud (Sheet)</th>
-                                        <th className="p-2 text-right">Variance</th>
+                                        <th className="p-2 text-center">Unit / Pcs</th>
+                                        <th className="p-2 text-right">Nominal (Cloud)</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-50">
                                     {analysisData.reconcileStats.map((stat, idx) => (
                                         <tr key={idx} className="hover:bg-slate-50">
                                             <td className="p-2 font-bold text-slate-700">{stat.method}</td>
-                                            <td className="p-2 text-right font-mono text-slate-600">{fmtMoney(stat.local)}</td>
+                                            <td className="p-2 text-center font-bold text-slate-600">{stat.qty}</td>
                                             <td className="p-2 text-right font-mono text-blue-600">{fmtMoney(stat.cloud)}</td>
-                                            <td className={`p-2 text-right font-bold ${stat.variance === 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                                {stat.variance === 0 ? '0' : fmtMoney(stat.variance)}
-                                            </td>
                                         </tr>
                                     ))}
                                 </tbody>
                                 <tfoot>
                                     <tr className="border-t-2 border-slate-200">
                                         <th className="p-2 font-bold text-slate-800">TOTAL</th>
-                                        <th className="p-2 text-right font-bold text-slate-800">{fmtMoney(analysisData.totalLocal)}</th>
+                                        <th className="p-2 text-center font-bold text-slate-800">{analysisData.totalCloudQty}</th>
                                         <th className="p-2 text-right font-bold text-blue-700">{fmtMoney(analysisData.totalCloud)}</th>
-                                        <th className={`p-2 text-right font-bold ${analysisData.totalLocal - analysisData.totalCloud === 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                            {fmtMoney(analysisData.totalLocal - analysisData.totalCloud)}
-                                        </th>
                                     </tr>
                                 </tfoot>
                             </table>
                         </div>
                     </div>
 
-                    {/* Marketplace Est. Profit Card */}
+                    {/* MARKETPLACE PENCAIRAN CARD */}
                     <div className="bg-slate-900 text-white p-5 rounded-xl shadow-md border border-slate-800 flex flex-col">
-                        <h3 className="text-sm font-bold text-slate-300 mb-4 uppercase flex items-center gap-2"><Smartphone size={16}/> Marketplace Profit Est. (Cloud Base)</h3>
-                        <div className="space-y-3 flex-1 text-sm">
-                            <div className="flex justify-between text-slate-400"><span>Gross AR Shopee:</span><span className="font-mono">{fmtMoney(analysisData.estCommission.GrossShopee)}</span></div>
-                            <div className="flex justify-between text-slate-400"><span>Gross AR Grab:</span><span className="font-mono">{fmtMoney(analysisData.estCommission.GrossGrab)}</span></div>
-                            <div className="flex justify-between text-slate-400"><span>Gross AR GoFood:</span><span className="font-mono">{fmtMoney(analysisData.estCommission.GrossGoFood)}</span></div>
+                        <h3 className="text-sm font-bold text-slate-300 mb-4 uppercase flex items-center gap-2"><Smartphone size={16}/> Pencairan Marketplace</h3>
+                        <div className="space-y-4 flex-1 text-sm">
+                            {['Shopee', 'Grab', 'GoFood'].map((mp) => {
+                                const data = analysisData.estCommission[mp as keyof typeof analysisData.estCommission] as any;
+                                if (data.Gross === 0) return null;
+                                
+                                return (
+                                    <div key={mp} className="border-b border-slate-700/50 pb-3">
+                                        <div className="font-bold text-blue-400 mb-1">{mp === 'Shopee' ? 'ShopeeFood' : mp === 'Grab' ? 'GrabFood' : 'GoFood'}</div>
+                                        <div className="flex justify-between text-slate-400 text-xs mb-0.5"><span>Gross AR:</span><span className="font-mono">{fmtMoney(data.Gross)}</span></div>
+                                        <div className="flex justify-between text-rose-400 text-xs mb-0.5"><span>(-) Commission:</span><span className="font-mono">{fmtMoney(data.Commission)}</span></div>
+                                        <div className="flex justify-between text-emerald-400 text-xs font-bold mt-1 pt-1 border-t border-slate-700/50"><span>Net Receivable:</span><span className="font-mono">{fmtMoney(data.Net)}</span></div>
+                                    </div>
+                                );
+                            })}
                             
-                            <div className="flex justify-between text-rose-400 italic pt-2 border-t border-slate-700">
-                                <span>(-) Est. Commission:</span>
-                                <span className="font-mono">{fmtMoney(analysisData.estCommission.ShopeeFood + analysisData.estCommission.GrabFood + analysisData.estCommission.GoFood)}</span>
+                            {analysisData.estCommission.TotalGross === 0 && (
+                                <div className="text-center text-slate-500 py-4 italic text-xs">Belum ada transaksi marketplace</div>
+                            )}
+                        </div>
+                        
+                        {analysisData.estCommission.TotalGross > 0 && (
+                            <div className="pt-4 border-t-2 border-slate-600 mt-4 space-y-1.5">
+                                <div className="flex justify-between text-slate-300 text-xs font-bold"><span>Total Gross AR:</span><span className="font-mono">{fmtMoney(analysisData.estCommission.TotalGross)}</span></div>
+                                <div className="flex justify-between text-rose-400 text-xs font-bold"><span>Total Commission:</span><span className="font-mono">-{fmtMoney(analysisData.estCommission.TotalCommission)}</span></div>
+                                <div className="flex justify-between items-center font-bold text-emerald-400 mt-2 text-base border-t border-slate-700 pt-2">
+                                    <span>Total Net Recv:</span>
+                                    <span>{fmtMoney(analysisData.TotalNet)}</span>
+                                </div>
                             </div>
-                        </div>
-                        <div className="pt-3 border-t border-slate-700 flex justify-between items-center font-bold text-emerald-400 mt-4 text-lg">
-                            <span>Est. Net Receivable</span>
-                            <span>{fmtMoney(
-                                (analysisData.estCommission.GrossShopee + analysisData.estCommission.GrossGrab + analysisData.estCommission.GrossGoFood) - 
-                                (analysisData.estCommission.ShopeeFood + analysisData.estCommission.GrabFood + analysisData.estCommission.GoFood)
-                            )}</span>
-                        </div>
+                        )}
                     </div>
                 </div>
 
@@ -1105,10 +1106,9 @@ export default function PosPage() {
         </div>
       )}
 
-      {/* MODALS & POPUPS */}
+      {/* MODALS & POPUPS TETAP SAMA */}
       {showShiftModal && (<div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6 text-center animate-in zoom-in-95"><div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4"><Store size={32}/></div><h3 className="font-bold text-xl text-slate-900 mb-2">Buka Shift Kasir</h3><div className="space-y-3 text-left"><div><label className="text-xs font-bold text-slate-500">Pilih Kasir</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedCashier(e.target.value)}><option value="">-- Pilih --</option>{masterCashiers.map((c, i) => <option key={i} value={c.Name}>{c.Name}</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Pilih Shift</label><select className="w-full p-2 border rounded-lg mt-1 bg-white" onChange={e => setSelectedShift(e.target.value)}><option value="">-- Pilih --</option>{masterShifts.map((s, i) => <option key={i} value={s.Shift_Name}>{s.Shift_Name} ({s.Start_Time || '00:00'}-{s.End_Time || '23:59'})</option>)}</select></div><div><label className="text-xs font-bold text-slate-500">Saldo Awal (Modal)</label><input type="number" className="w-full p-2 border rounded-lg mt-1" placeholder="Rp" onChange={e => setStartCashInput(parseInt(e.target.value)||0)}/></div><button onClick={handleOpenShift} className="w-full py-3 mt-2 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">Buka Toko</button></div></div></div>)}
       
-      {/* MODAL TUTUP SHIFT */}
       {showCloseShiftModal && (<div className="fixed inset-0 bg-slate-900/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden">
         <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden animate-in zoom-in-95 max-h-[95vh] flex flex-col">
             <div className="p-5 border-b flex justify-between items-center bg-slate-50">
@@ -1117,7 +1117,6 @@ export default function PosPage() {
             </div>
             
             <div className="flex-1 overflow-y-auto p-6 flex flex-col lg:flex-row gap-6">
-                {/* Kolom Kiri: Sales & SKU Scrollable */}
                 <div className="flex-1 flex flex-col gap-4">
                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
                         <h4 className="text-xs font-bold text-blue-800 mb-2 uppercase border-b border-blue-200 pb-1">A. Sales Performance</h4>
@@ -1164,7 +1163,6 @@ export default function PosPage() {
                     </div>
                 </div>
 
-                {/* Kolom Kanan: Payment Breakdown & Cash Control */}
                 <div className="flex-1 flex flex-col gap-6">
                     <div>
                         <h4 className="text-xs font-bold text-slate-500 mb-2 uppercase border-b pb-1">B. Payment Breakdown</h4>
@@ -1221,7 +1219,6 @@ export default function PosPage() {
         </div>
       </div>)}
       
-      {/* MODAL PAYMENT */}
       {showPaymentModal && (
           <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden">
               <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
@@ -1269,7 +1266,6 @@ export default function PosPage() {
       
       {showSuccessModal && (<div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl text-center p-8 animate-in zoom-in-95"><div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle2 size={32}/></div><h3 className="font-bold text-xl text-slate-900 mb-2">Transaksi Berhasil!</h3><p className="text-sm text-slate-500 mb-6">Total Transaksi: <span className="font-bold text-slate-800">{fmtMoney(currentTrx?.total || 0)}</span></p><div className="space-y-3"><button onClick={() => setShowSuccessModal(false)} className="w-full py-3 bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200">Simpan Transaksi Saja</button><button onClick={handlePrintReceipt} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 flex items-center justify-center gap-2"><Printer size={18}/> Preview & Cetak Nota</button></div></div></div>)}
       
-      {/* PREVIEW MODAL */}
       {showReceiptPreview && (<div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"><div className="p-4 border-b flex justify-between items-center bg-slate-50"><h3 className="font-bold text-slate-800">Preview Cetakan</h3><button onClick={() => setShowReceiptPreview(false)}><X className="text-slate-400"/></button></div><div className="p-8 bg-slate-200 overflow-y-auto flex justify-center"><div className="bg-white p-4 w-[300px] shadow-sm text-[10px] font-mono leading-tight">{printType === 'receipt' && currentTrx && <ReceiptTemplate trx={currentTrx}/>}{printType === 'shift_report' && shiftReportData && <ShiftReportTemplate data={shiftReportData}/>}</div></div><div className="p-4 border-t bg-white flex justify-end gap-2"><button onClick={() => setShowReceiptPreview(false)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-50 rounded-lg">Batal</button><button onClick={() => window.print()} className="px-6 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 flex items-center gap-2"><Printer size={16}/><FileDown size={16}/> Cetak / Simpan PDF</button></div></div></div>)}
       
       {/* --- PRINT AREA --- */}
