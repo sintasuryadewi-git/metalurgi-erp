@@ -24,32 +24,118 @@ const MARKETPLACE_COMMISSION = {
 
 type PaymentMethodType = 'Cash' | 'QRIS' | 'Transfer' | 'ShopeeFood' | 'GrabFood' | 'GoFood';
 
+// --- [FIX 100%] FUNGSI PENGEKSTRAK CERDAS MENGABAIKAN HURUF BESAR/KECIL ---
+const getTrxItems = (trx: any) => {
+    if (!trx) return [];
+    
+    // Jika data lokal (sudah berupa array Object)
+    if (Array.isArray(trx.items) && trx.items.length > 0) return trx.items;
+    
+    let rawData = null;
+    
+    // Cari kolom yang mengandung kata "item" tanpa peduli huruf besar/kecil
+    for (const key in trx) {
+        if (key.toLowerCase().includes('item')) {
+            if (trx[key] && trx[key] !== '[]' && trx[key] !== '') {
+                rawData = trx[key];
+                break;
+            }
+        }
+    }
+    
+    if (!rawData) return [];
+    if (Array.isArray(rawData)) return rawData;
+    
+    // Ekstrak JSON String dari Google Sheets
+    if (typeof rawData === 'string') {
+        try {
+            // Perbaikan karakter kutip ganda jika terpengaruh format Excel
+            let cleanStr = rawData.replace(/""/g, '"');
+            let parsed = JSON.parse(cleanStr);
+            
+            // Handle double-stringify (jika terenkripsi 2x)
+            if (typeof parsed === 'string') {
+                parsed = JSON.parse(parsed); 
+            }
+            if (Array.isArray(parsed)) return parsed;
+        } catch (e) {
+            console.error("Gagal membaca keranjang JSON:", e);
+        }
+    }
+    return [];
+};
+
+const getTrxTotal = (trx: any) => {
+    if (!trx) return 0;
+    if (trx.total !== undefined) return Number(trx.total);
+    for (const key in trx) {
+        if (key.toLowerCase().includes('total')) {
+            const cleaned = String(trx[key]).replace(/,/g, '');
+            return Number(cleaned) || 0;
+        }
+    }
+    return 0;
+};
+
+const getTrxMethod = (trx: any) => {
+    if (!trx) return 'Cash';
+    if (trx.paymentMethod) return trx.paymentMethod;
+    for (const key in trx) {
+        const lowerKey = key.toLowerCase();
+        if (lowerKey.includes('payment') || lowerKey.includes('metode') || lowerKey === 'meth') {
+            return trx[key] || 'Cash';
+        }
+    }
+    return 'Cash';
+};
+
+const getTrxDate = (trx: any) => {
+    let rawDate: any = null;
+    if (trx && trx.date) {
+        rawDate = trx.date;
+    } else if (trx) {
+        for (const key in trx) {
+            if (key.toLowerCase() === 'date' || key.toLowerCase() === 'tanggal') {
+                rawDate = trx[key];
+                break;
+            }
+        }
+    }
+    
+    if (!rawDate) return new Date().toISOString();
+
+    const numDate = Number(rawDate);
+    if (!isNaN(numDate) && numDate > 30000 && numDate < 60000) {
+        const excelEpoch = new Date(1899, 11, 30); 
+        const days = Math.floor(numDate);
+        const ms = Math.round((numDate - days) * 86400000);
+        return new Date(excelEpoch.getTime() + days * 86400000 + ms).toISOString();
+    }
+    const d = new Date(rawDate);
+    return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+};
+
+
 export default function PosPage() {
-  // --- STATE CORE ---
   const [activeView, setActiveView] = useState<'cashier' | 'transactions' | 'shifts' | 'analysis'>('cashier');
   const [products, setProducts] = useState<any[]>([]);
   const [cart, setCart] = useState<any[]>([]);
   
-  // --- STATE USER & SYNC ---
   const [ownerEmail, setOwnerEmail] = useState<string>(''); 
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // --- STATE CLOUD DASHBOARD & GL AUDIT ---
   const [viewSource, setViewSource] = useState<'local' | 'cloud'>('local');
   const [cloudTransactions, setCloudTransactions] = useState<any[]>([]);
   const [isLoadingCloud, setIsLoadingCloud] = useState(false);
   
-  // State for GL Audit
   const [isAuditingGL, setIsAuditingGL] = useState(false);
   const [unsyncedGLIds, setUnsyncedGLIds] = useState<string[]>([]);
   const [auditDone, setAuditDone] = useState(false);
 
-  // --- STATE MASTERS ---
   const [masterCashiers, setMasterCashiers] = useState<any[]>([]);
   const [masterShifts, setMasterShifts] = useState<any[]>([]);
   
-  // STATE CONFIG STRUK
   const [receiptConfig, setReceiptConfig] = useState<any>({
       Store_Name: 'METALURGI POS',
       Address: '',
@@ -61,7 +147,6 @@ export default function PosPage() {
   const [calculatedStockMap, setCalculatedStockMap] = useState<Record<string, number>>({});
   const [localSoldQtyMap, setLocalSoldQtyMap] = useState<Record<string, number>>({});
 
-  // --- STATE SHIFT & CLOSING ---
   const [isShiftOpen, setIsShiftOpen] = useState(false);
   const [shiftData, setShiftData] = useState<any>({ 
       id: '', startTime: null, startCash: 0, totalSales: 0, 
@@ -79,7 +164,6 @@ export default function PosPage() {
   const [cashOutInput, setCashOutInput] = useState(0);
   const [closingNote, setClosingNote] = useState('');
 
-  // --- STATE PAYMENT ---
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false); 
   const [showReceiptPreview, setShowReceiptPreview] = useState(false); 
@@ -87,8 +171,9 @@ export default function PosPage() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>('Cash');
   const [amountPaid, setAmountPaid] = useState<number>(0);
   const [currentTrx, setCurrentTrx] = useState<any>(null); 
+  
+  const [customTrxDate, setCustomTrxDate] = useState<string>(''); 
 
-  // --- STATE HISTORY & FILTER ---
   const [allTransactions, setAllTransactions] = useState<any[]>([]);
   const [dateRange, setDateRange] = useState({ 
     start: new Date().toISOString().split('T')[0], 
@@ -98,17 +183,14 @@ export default function PosPage() {
   const [historySearch, setHistorySearch] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'timestamp', direction: 'desc' });
 
-  // STATE PAGINATION
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
-  // --- STATE MISC ---
   const [printType, setPrintType] = useState<'receipt' | 'shift_report' | null>(null);
   const [shiftReportData, setShiftReportData] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
 
-  // --- DATA FETCHING ---
   const { data: apiData, loading } = useFetch<any>('/api/pos');
   const { data: glApiData } = useFetch<any>('/api/general-ledger');
 
@@ -124,24 +206,6 @@ export default function PosPage() {
       });
   };
 
-  // --- PENGEKSTRAK DATA CERDAS ANTI-BLANK ---
-  const getTrxItems = (trx: any) => {
-      if (!trx) return [];
-      let raw = trx.items || trx.items_json || trx.Item_JSON || trx.Items || '[]';
-      if (Array.isArray(raw)) return raw;
-      if (typeof raw === 'string') {
-          try {
-              let parsed = JSON.parse(raw);
-              if (typeof parsed === 'string') parsed = JSON.parse(parsed); // Jaga-jaga jika ter-stringify ganda
-              if (Array.isArray(parsed)) return parsed;
-          } catch(e) {}
-      }
-      return [];
-  };
-  const getTrxTotal = (trx: any) => Number(trx.total || trx.Total_Amount || trx.Total || 0);
-  const getTrxMethod = (trx: any) => trx.paymentMethod || trx.Payment_Method || 'Cash';
-  const getTrxDate = (trx: any) => trx.date || trx.Date || new Date().toISOString();
-
   useEffect(() => {
     if (typeof window !== 'undefined') {
         const savedLogo = localStorage.getItem('METALURGI_SHOP_LOGO');
@@ -156,18 +220,7 @@ export default function PosPage() {
         }
 
         const directEmail = localStorage.getItem('METALURGI_USER_EMAIL');
-        if (directEmail) {
-            setOwnerEmail(directEmail);
-        } else {
-            const userObj = localStorage.getItem('METALURGI_USER');
-            if (userObj) {
-                try {
-                    const parsed = JSON.parse(userObj);
-                    if(parsed.email) setOwnerEmail(parsed.email);
-                    setCurrentUser(parsed);
-                } catch(e) {}
-            }
-        }
+        if (directEmail) setOwnerEmail(directEmail);
 
         const savedShiftHistory = JSON.parse(localStorage.getItem('METALURGI_POS_SHIFT_HISTORY') || '[]');
         setShiftHistory(savedShiftHistory.reverse()); 
@@ -218,17 +271,17 @@ export default function PosPage() {
         if (rawCloudTrx.length > 0) {
             const parsedCloudTrx = rawCloudTrx.map((row: any) => {
                 return {
-                    id: row.ID,
-                    date: row.Date,
-                    timestamp: row.Timestamp,
-                    total: parseFloat(row.Total_Amount || row.Total) || 0,
-                    paymentMethod: row.Payment_Method,
-                    amountPaid: parseFloat(row.Amount_Paid) || 0,
+                    id: row.Trx_ID || row.ID || row.id || `POS-${Math.floor(Math.random()*1000)}`,
+                    date: getTrxDate(row),
+                    timestamp: row.Time || row.Timestamp || '-',
+                    total: getTrxTotal(row),
+                    paymentMethod: getTrxMethod(row),
+                    amountPaid: parseFloat(row.Amount_Paid) || getTrxTotal(row),
                     change: parseFloat(row.Change) || 0,
-                    cashier: row.Cashier,
-                    shift: row.Shift,
-                    shiftId: row.Shift_ID,
-                    items: getTrxItems(row), // Pastikan items terbaca
+                    cashier: row.Cashier || '-',
+                    shift: row.Shift || '-',
+                    shiftId: row.Shift_ID || '-',
+                    items: getTrxItems(row),
                     isCloud: true 
                 };
             });
@@ -236,9 +289,7 @@ export default function PosPage() {
         }
 
         const stockMap: Record<string, number> = {};
-        rawProducts.forEach((p: any) => {
-             stockMap[p.SKU] = parseInt(p.Initial_Stock || '0');
-        });
+        rawProducts.forEach((p: any) => { stockMap[p.SKU] = parseInt(p.Initial_Stock || '0'); });
         rawMovements.forEach((m: any) => {
              const qty = parseInt(m.Qty || '0');
              const sku = m.Product_SKU;
@@ -248,20 +299,12 @@ export default function PosPage() {
              }
         });
         setCalculatedStockMap(stockMap); 
-    } catch (err) {
-        console.error("Gagal parsing data awal:", err);
-    }
+    } catch (err) {}
   }, [apiData]);
 
-  // --- HELPER ---
-  const fmtMoney = (n: any) => {
-    const num = Number(n) || 0; 
-    return "Rp " + num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  };
+  const fmtMoney = (n: any) => "Rp " + (Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   
-  const getProductPromo = (sku: string, basePrice: number) => {
-      return { hasPromo: false, finalPrice: basePrice, discountVal: 0, label: '', minQty: 1 };
-  };
+  const getProductPromo = (sku: string, basePrice: number) => ({ hasPromo: false, finalPrice: basePrice, discountVal: 0, label: '', minQty: 1 });
 
   const getLiveStock = (product: any) => {
       const sheetStock = calculatedStockMap[product.SKU] || 0;
@@ -272,32 +315,31 @@ export default function PosPage() {
       return Math.max(0, sheetStock - soldLocally - inCart);
   };
 
-  // --- [FIX] MENGUBAH JALUR FETCH AGAR BYPASS BUG BACKEND ---
   const fetchCloudData = async () => {
     setIsLoadingCloud(true);
     setAuditDone(false); 
     try {
-        const res = await fetch('/api/pos');
-        const json = await res.json();
-        
-        if (json && json.posHistory) {
-            const rawCloud = processSheetData(json.posHistory);
-            const parsed = rawCloud.map((row: any) => ({
-                id: row.ID,
-                date: row.Date,
-                timestamp: row.Timestamp,
-                total: parseFloat(row.Total_Amount || row.Total) || 0,
-                paymentMethod: row.Payment_Method,
-                amountPaid: parseFloat(row.Amount_Paid) || 0,
-                change: parseFloat(row.Change) || 0,
-                cashier: row.Cashier,
-                shift: row.Shift,
-                shiftId: row.Shift_ID,
-                items: getTrxItems(row),
-                isCloud: true
-            }));
-            setCloudTransactions(parsed.reverse());
-        }
+      const res = await fetch('/api/pos');
+      const json = await res.json();
+      
+      if (json && json.posHistory) {
+          const rawCloudTrx = processSheetData(json.posHistory);
+          const parsedCloudTrx = rawCloudTrx.map((row: any) => ({
+              id: row.Trx_ID || row.ID || row.id || `POS-${Math.floor(Math.random()*1000)}`,
+              date: getTrxDate(row),
+              timestamp: row.Time || row.Timestamp || '-',
+              total: getTrxTotal(row),
+              paymentMethod: getTrxMethod(row),
+              amountPaid: parseFloat(row.Amount_Paid) || getTrxTotal(row),
+              change: parseFloat(row.Change) || 0,
+              cashier: row.Cashier || '-',
+              shift: row.Shift || '-',
+              shiftId: row.Shift_ID || '-',
+              items: getTrxItems(row), 
+              isCloud: true 
+          }));
+          setCloudTransactions(parsedCloudTrx.reverse());
+      }
     } catch (err) {} 
     finally { setIsLoadingCloud(false); }
   };
@@ -312,58 +354,32 @@ export default function PosPage() {
 
       try {
           if (!glApiData || !glApiData.gl) {
-              alert("Data General Ledger belum siap atau gagal dimuat. Silakan refresh halaman (F5) dan coba lagi.");
-              setIsAuditingGL(false);
-              return;
+              alert("Data General Ledger belum siap. Silakan refresh halaman (F5).");
+              setIsAuditingGL(false); return;
           }
-          
           const glRows = glApiData.gl || [];
           const glRefIds = new Set(glRows.slice(1).map((r:any) => String(r[6])));
-          
           const missingIds: string[] = [];
-          cloudTransactions.forEach(trx => {
-              if (!glRefIds.has(trx.id)) {
-                  missingIds.push(trx.id);
-              }
-          });
+          cloudTransactions.forEach(trx => { if (!glRefIds.has(trx.id)) missingIds.push(trx.id); });
           
-          setUnsyncedGLIds(missingIds);
-          setAuditDone(true);
-
-          if (missingIds.length === 0) {
-              alert("✅ Audit Selesai: Semua transaksi Cloud sudah masuk ke General Ledger!");
-          } else {
-              alert(`⚠️ Peringatan: Ditemukan ${missingIds.length} transaksi yang belum masuk ke General Ledger. Silakan cek tabel untuk tracing.`);
-          }
-      } catch (e) {
-          alert("Gagal memproses audit General Ledger.");
-      } finally {
-          setIsAuditingGL(false);
-      }
+          setUnsyncedGLIds(missingIds); setAuditDone(true);
+          if (missingIds.length === 0) alert("✅ Audit Selesai: Semua transaksi Cloud sudah masuk ke General Ledger!");
+          else alert(`⚠️ Peringatan: Ditemukan ${missingIds.length} transaksi yang belum masuk ke General Ledger.`);
+      } catch (e) { alert("Gagal memproses audit General Ledger."); } 
+      finally { setIsAuditingGL(false); }
   };
 
-  // --- FUNGSI FILTER CEPAT ---
   const handleQuickFilter = (preset: string) => {
       const dateNow = new Date();
-      const formatDate = (date: Date) => {
-          const y = date.getFullYear();
-          const m = String(date.getMonth() + 1).padStart(2, '0');
-          const d = String(date.getDate()).padStart(2, '0');
-          return `${y}-${m}-${d}`;
-      };
-
-      let start = new Date(dateNow);
-      let end = new Date(dateNow);
+      const formatDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      let start = new Date(dateNow), end = new Date(dateNow);
 
       if (preset === 'yesterday') {
-          start.setDate(dateNow.getDate() - 1);
-          end.setDate(dateNow.getDate() - 1);
+          start.setDate(dateNow.getDate() - 1); end.setDate(dateNow.getDate() - 1);
       } else if (preset === 'thisWeek') {
           const day = dateNow.getDay();
           const diff = dateNow.getDate() - day + (day === 0 ? -6 : 1);
-          start.setDate(diff);
-          end = new Date(start);
-          end.setDate(start.getDate() + 6);
+          start.setDate(diff); end = new Date(start); end.setDate(start.getDate() + 6);
       } else if (preset === 'thisMonth') {
           start = new Date(dateNow.getFullYear(), dateNow.getMonth(), 1);
           end = new Date(dateNow.getFullYear(), dateNow.getMonth() + 1, 0);
@@ -371,18 +387,15 @@ export default function PosPage() {
           start = new Date(dateNow.getFullYear(), dateNow.getMonth() - 1, 1);
           end = new Date(dateNow.getFullYear(), dateNow.getMonth(), 0);
       }
-
       setDateRange({ start: formatDate(start), end: formatDate(end) });
   };
-
 
   const filteredHistory = useMemo(() => {
       const sourceData = viewSource === 'local' ? allTransactions : cloudTransactions;
       let data = [...sourceData];
       
-      const start = new Date(dateRange.start); 
-      const end = new Date(dateRange.end); 
-      end.setHours(23, 59, 59, 999);
+      const start = new Date(dateRange.start); start.setHours(0,0,0,0);
+      const end = new Date(dateRange.end); end.setHours(23, 59, 59, 999);
 
       data = data.filter(t => { 
           const tDate = new Date(getTrxDate(t)); 
@@ -396,8 +409,7 @@ export default function PosPage() {
       }
 
       data.sort((a, b) => {
-          let aVal = a[sortConfig.key];
-          let bVal = b[sortConfig.key];
+          let aVal = a[sortConfig.key]; let bVal = b[sortConfig.key];
           if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
           if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
           return 0;
@@ -416,11 +428,9 @@ export default function PosPage() {
       const start = new Date(dateRange.start); start.setHours(0,0,0,0);
       const end = new Date(dateRange.end); end.setHours(23,59,59,999);
 
-      // 1. RECONCILIATION: Fokus ke data Cloud + Unit/Pcs
       const methods = ['Cash', 'QRIS', 'Transfer', 'ShopeeFood', 'GrabFood', 'GoFood'];
       const reconcileStats: any[] = [];
-      let totalCloud = 0;
-      let totalCloudQty = 0;
+      let totalCloud = 0; let totalCloudQty = 0;
 
       const cldTrx = cloudTransactions.filter(t => {
           const d = new Date(getTrxDate(t));
@@ -433,31 +443,20 @@ export default function PosPage() {
           
           let cQty = 0;
           trxs.forEach(trx => {
-              const items = getTrxItems(trx);
-              items.forEach((item: any) => {
-                  cQty += (Number(item.qty) || 0);
-              });
+              getTrxItems(trx).forEach((item: any) => { cQty += (Number(item.qty) || 0); });
           });
           
-          if (c > 0 || cQty > 0) {
-              reconcileStats.push({ method: m, cloud: c, qty: cQty });
-          }
-          totalCloud += c;
-          totalCloudQty += cQty;
+          if (c > 0 || cQty > 0) reconcileStats.push({ method: m, cloud: c, qty: cQty });
+          totalCloud += c; totalCloudQty += cQty;
       });
 
-      // 2. SKU PERFORMANCE
       const skuStats: Record<string, { name: string, qty: number, total: number }> = {};
-      const activeTrx = viewSource === 'local' 
-          ? allTransactions.filter(t => {
-                const d = new Date(getTrxDate(t));
-                return d >= start && d <= end;
-            }) 
-          : cldTrx;
+      const activeTrx = viewSource === 'local' ? allTransactions.filter(t => {
+          const d = new Date(getTrxDate(t)); return d >= start && d <= end;
+      }) : cldTrx;
       
       activeTrx.forEach(trx => {
-          const items = getTrxItems(trx);
-          items.forEach((item: any) => {
+          getTrxItems(trx).forEach((item: any) => {
               const sku = item.sku || 'UNKNOWN';
               if (!skuStats[sku]) skuStats[sku] = { name: item.name || 'Unknown Item', qty: 0, total: 0 };
               skuStats[sku].qty += (Number(item.qty) || 0);
@@ -465,24 +464,16 @@ export default function PosPage() {
           });
       });
 
-      const rankedSKU = Object.values(skuStats)
-          .filter(s => s.qty > 0)
-          .sort((a, b) => b.total - a.total);
-          
+      const rankedSKU = Object.values(skuStats).filter(s => s.qty > 0).sort((a, b) => b.total - a.total);
       const grandTotalQty = rankedSKU.reduce((sum, item) => sum + item.qty, 0);
       const grandTotalAmount = rankedSKU.reduce((sum, item) => sum + item.total, 0);
 
-      // 3. MARKETPLACE EST. PROFIT -> PENCAIRAN MARKETPLACE
       const getMpTotal = (mName: string) => cldTrx.filter(t => getTrxMethod(t) === mName).reduce((a,b) => a + getTrxTotal(b), 0);
       const cloudShopee = getMpTotal('ShopeeFood');
       const cloudGrab = getMpTotal('GrabFood');
       const cloudGoFood = getMpTotal('GoFood');
 
-      const calcMp = (gross: number, commRate: number) => ({
-          Gross: gross,
-          Commission: gross * commRate,
-          Net: gross - (gross * commRate)
-      });
+      const calcMp = (gross: number, commRate: number) => ({ Gross: gross, Commission: gross * commRate, Net: gross - (gross * commRate) });
 
       const estCommission = {
           Shopee: calcMp(cloudShopee, MARKETPLACE_COMMISSION.ShopeeFood),
@@ -491,19 +482,15 @@ export default function PosPage() {
           TotalGross: cloudShopee + cloudGrab + cloudGoFood,
           TotalCommission: (cloudShopee * MARKETPLACE_COMMISSION.ShopeeFood) + (cloudGrab * MARKETPLACE_COMMISSION.GrabFood) + (cloudGoFood * MARKETPLACE_COMMISSION.GoFood)
       };
-      
       const TotalNet = estCommission.TotalGross - estCommission.TotalCommission;
 
       return { reconcileStats, totalCloud, totalCloudQty, rankedSKU, grandTotalQty, grandTotalAmount, estCommission, TotalNet };
   }, [allTransactions, cloudTransactions, dateRange, viewSource]);
 
-
-  // --- SYNC & ACTION LOGIC ---
   const runAutoSync = async (transaction: any) => {
     if (!ownerEmail) return; 
     setIsSyncing(true);
-    try {
-       await fetch('/api/pos/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, transactions: [transaction] }) });
+    try { await fetch('/api/pos/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, transactions: [transaction] }) });
     } catch (err) {} finally { setIsSyncing(false); }
   };
 
@@ -514,34 +501,27 @@ export default function PosPage() {
       try {
           const res = await fetch('/api/pos/shift', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, shiftData: shiftHistory }) });
           const json = await res.json();
-          if (json.success) alert(`✅ Laporan Shift Terupload!`);
-          else alert(`❌ Gagal: ${json.error}`);
-      } catch (err) { alert("Gagal koneksi server."); }
-      finally { setIsSyncing(false); }
+          if (json.success) alert(`✅ Laporan Shift Terupload!`); else alert(`❌ Gagal: ${json.error}`);
+      } catch (err) { alert("Gagal koneksi server."); } finally { setIsSyncing(false); }
   };
 
   const handleDeleteTransaction = (id: string) => {
       if(viewSource !== 'local') return alert("Data Cloud tidak bisa dihapus dari sini.");
-      if(confirm("Hapus transaksi ini? Stok tidak akan dikembalikan otomatis.")) {
+      if(confirm("Hapus transaksi ini?")) {
           const newTrx = allTransactions.filter(t => t.id !== id);
-          setAllTransactions(newTrx);
-          localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(newTrx));
+          setAllTransactions(newTrx); localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(newTrx));
       }
   };
 
   const handleResetTransactions = () => {
       if (viewSource !== 'local') return;
       if (allTransactions.length === 0) return alert("Data kosong.");
-      if (confirm("⚠️ Hapus SEMUA riwayat transaksi LOKAL?")) {
-          setAllTransactions([]); localStorage.removeItem('METALURGI_POS_TRX');
-      }
+      if (confirm("⚠️ Hapus SEMUA riwayat transaksi LOKAL?")) { setAllTransactions([]); localStorage.removeItem('METALURGI_POS_TRX'); }
   };
 
   const handleResetShifts = () => {
       if (shiftHistory.length === 0) return alert("Data kosong.");
-      if(confirm("⚠️ Hapus semua riwayat Shift LOKAL?")) {
-          setShiftHistory([]); localStorage.removeItem('METALURGI_POS_SHIFT_HISTORY');
-      }
+      if(confirm("⚠️ Hapus semua riwayat Shift LOKAL?")) { setShiftHistory([]); localStorage.removeItem('METALURGI_POS_SHIFT_HISTORY'); }
   };
 
   const addToCart = (product: any) => {
@@ -578,10 +558,8 @@ export default function PosPage() {
       try {
           const res = await fetch('/api/pos/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, transactions: trxs }) });
           const json = await res.json();
-          if (json.success) alert(`✅ SUKSES: ${json.message}`);
-          else alert(`❌ GAGAL: ${json.error}`);
-      } catch (err) { alert("Gagal koneksi."); } 
-      finally { setIsSyncing(false); }
+          if (json.success) alert(`✅ SUKSES: ${json.message}`); else alert(`❌ GAGAL: ${json.error}`);
+      } catch (err) { alert("Gagal koneksi."); } finally { setIsSyncing(false); }
   };
 
   const handleOpenShift = () => {
@@ -592,24 +570,19 @@ export default function PosPage() {
 
   const handleCloseShift = () => {
      if(!confirm("Proses Tutup Shift? Pastikan laci kasir sudah dihitung.")) return;
-     
      const shiftTrx = allTransactions.filter(t => t.shiftId === shiftData.id);
-     
-     const grossSales = shiftTrx.reduce((acc, t) => acc + (t.total || 0), 0);
-     const totalDiscount = 0; 
-     const totalTax = 0; 
-     const netSales = grossSales - totalDiscount + totalTax;
-
+     const grossSales = shiftTrx.reduce((acc, t) => acc + getTrxTotal(t), 0);
+     const totalDiscount = 0; const totalTax = 0; const netSales = grossSales - totalDiscount + totalTax;
      let totalItemQty = 0;
 
      const paymentBreakdown = { Cash: 0, QRIS: 0, Transfer: 0, ShopeeFood: 0, GrabFood: 0, GoFood: 0 };
      const shiftItemsMap: Record<string, {name: string, qty: number, total: number}> = {};
 
      shiftTrx.forEach(t => {
-         const method = t.paymentMethod as PaymentMethodType;
-         if (paymentBreakdown[method] !== undefined) paymentBreakdown[method] += (t.total || 0);
+         const method = getTrxMethod(t) as PaymentMethodType;
+         if (paymentBreakdown[method] !== undefined) paymentBreakdown[method] += getTrxTotal(t);
 
-         t.items.forEach((item: any) => {
+         getTrxItems(t).forEach((item: any) => {
              totalItemQty += item.qty;
              if (!shiftItemsMap[item.sku]) shiftItemsMap[item.sku] = { name: item.name, qty: 0, total: 0 };
              shiftItemsMap[item.sku].qty += item.qty;
@@ -618,7 +591,6 @@ export default function PosPage() {
      });
 
      const shiftItemsArray = Object.values(shiftItemsMap).sort((a,b) => b.total - a.total);
-
      const cashIn = paymentBreakdown.Cash;
      const expectedCashEnd = shiftData.startCash + cashIn - cashOutInput;
      const variance = endCashInput - expectedCashEnd;
@@ -633,22 +605,21 @@ export default function PosPage() {
      const history = JSON.parse(localStorage.getItem('METALURGI_POS_SHIFT_HISTORY') || '[]');
      const newHistory = [closingData, ...history];
      localStorage.setItem('METALURGI_POS_SHIFT_HISTORY', JSON.stringify(newHistory));
-     setShiftHistory(newHistory); 
-     localStorage.removeItem('METALURGI_POS_SHIFT');
+     setShiftHistory(newHistory); localStorage.removeItem('METALURGI_POS_SHIFT');
      
-     if (ownerEmail) {
-         fetch('/api/pos/shift', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, shiftData: closingData }) }).catch(()=>{});
-     }
-
+     if (ownerEmail) fetch('/api/pos/shift', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ownerEmail, shiftData: closingData }) }).catch(()=>{});
      setIsShiftOpen(false); setShiftData({ startTime: null, startCash: 0, totalSales: 0 }); setCart([]); setShowCloseShiftModal(false);
      setShiftReportData(closingData); setPrintType('shift_report'); setShowReceiptPreview(true);
   };
 
   const handleProcessPayment = () => {
      if (amountPaid < cartTotal && paymentMethod === 'Cash') return alert("Uang pembayaran kurang!");
-     const liveDate = new Date(); 
+     const liveDate = customTrxDate ? new Date(customTrxDate) : new Date(); 
+
      const trx = {
-        id: `POS-${Math.floor(Math.random()*1000000)}`, date: liveDate.toISOString(), timestamp: liveDate.toLocaleTimeString(), 
+        id: `POS-${Math.floor(Math.random()*1000000)}`, 
+        date: liveDate.toISOString(), 
+        timestamp: liveDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }), 
         items: cart, total: cartTotal, paymentMethod, 
         amountPaid: ['QRIS','Transfer','ShopeeFood','GrabFood','GoFood'].includes(paymentMethod) ? cartTotal : amountPaid,
         change: ['QRIS','Transfer','ShopeeFood','GrabFood','GoFood'].includes(paymentMethod) ? 0 : Math.max(0, changeDue), 
@@ -676,7 +647,7 @@ export default function PosPage() {
 
           const dateStr = trx.date.split('T')[0]; 
           journals.push({ source: 'POS', id: `JNL-${trx.id}-SALES`, date: dateStr, ref: trx.id, desc: `Penjualan POS - ${trx.paymentMethod}`, debit_acc: debitAcc, credit_acc: '4-1000', amount: trx.total }); 
-          trx.items.forEach((item: any) => { 
+          getTrxItems(trx).forEach((item: any) => { 
               const prod = products.find(p => p.SKU === item.sku); 
               const cost = parseInt(prod?.Std_Cost_Budget || '0'); 
               if (cost > 0) journals.push({ source: 'POS', id: `JNL-${trx.id}-COGS-${item.sku}`, date: dateStr, ref: trx.id, desc: `HPP - ${item.name}`, debit_acc: '5-1000', credit_acc: '1-1003', amount: cost * item.qty }); 
@@ -688,7 +659,7 @@ export default function PosPage() {
       } catch (err) {} 
   };
   
-  const updateInventoryStock = (trx: any) => { const dateStr = trx.date.split('T')[0]; const moves = trx.items.map((item: any) => ({ id: `MOV-POS-${trx.id}-${item.sku}`, date: dateStr, type: 'OUT', sku: item.sku, qty: item.qty, cost: 0, ref: trx.id })); const existingMoves = JSON.parse(localStorage.getItem('METALURGI_INVENTORY_MOVEMENTS') || '[]'); const newMoves = [...existingMoves, ...moves]; localStorage.setItem('METALURGI_INVENTORY_MOVEMENTS', JSON.stringify(newMoves)); const newSoldMap = { ...localSoldQtyMap }; moves.forEach((m: any) => { newSoldMap[m.sku] = (newSoldMap[m.sku] || 0) + m.qty; }); setLocalSoldQtyMap(newSoldMap); };
+  const updateInventoryStock = (trx: any) => { const dateStr = trx.date.split('T')[0]; const moves = getTrxItems(trx).map((item: any) => ({ id: `MOV-POS-${trx.id}-${item.sku}`, date: dateStr, type: 'OUT', sku: item.sku, qty: item.qty, cost: 0, ref: trx.id })); const existingMoves = JSON.parse(localStorage.getItem('METALURGI_INVENTORY_MOVEMENTS') || '[]'); const newMoves = [...existingMoves, ...moves]; localStorage.setItem('METALURGI_INVENTORY_MOVEMENTS', JSON.stringify(newMoves)); const newSoldMap = { ...localSoldQtyMap }; moves.forEach((m: any) => { newSoldMap[m.sku] = (newSoldMap[m.sku] || 0) + m.qty; }); setLocalSoldQtyMap(newSoldMap); };
   const handlePrintReceipt = () => { if(!currentTrx) return; const allTrx = JSON.parse(localStorage.getItem('METALURGI_POS_TRX') || '[]'); const updatedTrx = allTrx.map((t:any) => t.id === currentTrx.id ? { ...t, isPrinted: true } : t); localStorage.setItem('METALURGI_POS_TRX', JSON.stringify(updatedTrx)); setAllTransactions(updatedTrx); setShowSuccessModal(false); setPrintType('receipt'); setShowReceiptPreview(true); };
 
   const categories = ['All', ...Array.from(new Set(products.map(p => p.Category)))];
@@ -747,7 +718,7 @@ export default function PosPage() {
 
   const ReceiptTemplate = ({ trx }: { trx: any }) => (
       <>
-         <div className="text-center mb-4">{logoPreview ? (<img src={logoPreview} alt="Logo" className="h-10 mx-auto mb-2 object-contain"/>) : (<div className="mb-2 text-2xl">🏪</div>)}<h2 className="font-bold text-sm uppercase text-black">{receiptConfig.Store_Name || 'METALURGI POS'}</h2>{receiptConfig.Address && <div className="text-[10px] text-slate-600">{receiptConfig.Address}</div>}{receiptConfig.Phone && <div className="text-[10px] text-slate-600">{receiptConfig.Phone}</div>}<div className="mt-2 text-left border-t border-black border-dashed pt-2"><div className="flex justify-between"><span>Trx:</span> <span>{trx.id}</span></div><div className="flex justify-between"><span>Date:</span> <span>{trx.date.split('T')[0]} {trx.timestamp}</span></div><div className="flex justify-between"><span>Kasir:</span> <span>{trx.cashier}</span></div><div className="flex justify-between"><span>Shift:</span> <span>{trx.shift}</span></div><div className="flex justify-between"><span>Metode:</span> <span>{trx.paymentMethod}</span></div></div></div><div className="border-b border-black border-dashed mb-2"></div>{(trx.items||[]).map((item:any, i:number)=>(<div key={i} className="mb-1"><div>{item.name}</div><div className="flex justify-between"><span>{item.qty} x {fmtMoney(item.price)}</span><span>{fmtMoney(item.qty*item.price)}</span></div></div>))}<div className="border-b border-black border-dashed my-2"></div><div className="space-y-1"><div className="flex justify-between font-bold text-sm border-t border-black border-dashed pt-1"><span>TOTAL</span><span>{fmtMoney(trx.total)}</span></div><div className="flex justify-between mt-2"><span>Bayar</span><span>{fmtMoney(trx.amountPaid)}</span></div><div className="flex justify-between"><span>Kembali</span><span>{fmtMoney(trx.change)}</span></div></div><div className="text-center mt-4 text-[10px]"><p>{receiptConfig.Footer || 'Terima Kasih'}</p>{receiptConfig.Instagram && <p className="mt-1 font-bold">{receiptConfig.Instagram}</p>}</div>
+         <div className="text-center mb-4">{logoPreview ? (<img src={logoPreview} alt="Logo" className="h-10 mx-auto mb-2 object-contain"/>) : (<div className="mb-2 text-2xl">🏪</div>)}<h2 className="font-bold text-sm uppercase text-black">{receiptConfig.Store_Name || 'METALURGI POS'}</h2>{receiptConfig.Address && <div className="text-[10px] text-slate-600">{receiptConfig.Address}</div>}{receiptConfig.Phone && <div className="text-[10px] text-slate-600">{receiptConfig.Phone}</div>}<div className="mt-2 text-left border-t border-black border-dashed pt-2"><div className="flex justify-between"><span>Trx:</span> <span>{trx.id}</span></div><div className="flex justify-between"><span>Date:</span> <span>{getTrxDate(trx).split('T')[0]} {trx.timestamp}</span></div><div className="flex justify-between"><span>Kasir:</span> <span>{trx.cashier}</span></div><div className="flex justify-between"><span>Shift:</span> <span>{trx.shift}</span></div><div className="flex justify-between"><span>Metode:</span> <span>{getTrxMethod(trx)}</span></div></div></div><div className="border-b border-black border-dashed mb-2"></div>{getTrxItems(trx).map((item:any, i:number)=>(<div key={i} className="mb-1"><div>{item.name}</div><div className="flex justify-between"><span>{item.qty} x {fmtMoney(item.price)}</span><span>{fmtMoney(item.qty*item.price)}</span></div></div>))}<div className="border-b border-black border-dashed my-2"></div><div className="space-y-1"><div className="flex justify-between font-bold text-sm border-t border-black border-dashed pt-1"><span>TOTAL</span><span>{fmtMoney(getTrxTotal(trx))}</span></div><div className="flex justify-between mt-2"><span>Bayar</span><span>{fmtMoney(trx.amountPaid)}</span></div><div className="flex justify-between"><span>Kembali</span><span>{fmtMoney(trx.change)}</span></div></div><div className="text-center mt-4 text-[10px]"><p>{receiptConfig.Footer || 'Terima Kasih'}</p>{receiptConfig.Instagram && <p className="mt-1 font-bold">{receiptConfig.Instagram}</p>}</div>
       </>
   );
 
@@ -909,7 +880,19 @@ export default function PosPage() {
                     <div className="flex justify-between text-lg font-bold text-slate-900">
                         <span>Total</span><span>{fmtMoney(cartTotal)}</span>
                     </div>
-                    <button onClick={() => cartTotal > 0 && setShowPaymentModal(true)} disabled={cartTotal === 0} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all">
+                    <button 
+                        onClick={() => {
+                            if (cartTotal > 0) {
+                                const now = new Date();
+                                const tzOffset = now.getTimezoneOffset() * 60000;
+                                const localISOTime = new Date(now.getTime() - tzOffset).toISOString().slice(0, 16);
+                                setCustomTrxDate(localISOTime);
+                                setShowPaymentModal(true);
+                            }
+                        }} 
+                        disabled={cartTotal === 0} 
+                        className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all"
+                    >
                         Bayar Sekarang
                     </button>
                 </div>
@@ -995,8 +978,8 @@ export default function PosPage() {
                                     <div>{new Date(getTrxDate(trx)).toLocaleDateString()}</div>
                                     <div>{new Date(getTrxDate(trx)).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
                                 </td>
-                                <td className="p-4 align-top"><div className="flex flex-col gap-1">{(getTrxItems(trx)).map((it:any, i:number) => (<span key={i} className="text-xs text-slate-700">• {it.name} <span className="text-slate-400">x{it.qty}</span></span>))}</div></td>
-                                <td className="p-4 text-center font-bold align-top">{(getTrxItems(trx)).reduce((a:any,b:any)=>a+(Number(b.qty)||0),0)}</td>
+                                <td className="p-4 align-top"><div className="flex flex-col gap-1">{getTrxItems(trx).map((it:any, i:number) => (<span key={i} className="text-xs text-slate-700">• {it.name} <span className="text-slate-400">x{it.qty}</span></span>))}</div></td>
+                                <td className="p-4 text-center font-bold align-top">{getTrxItems(trx).reduce((a:any,b:any)=>a+(Number(b.qty)||0),0)}</td>
                                 <td className="p-4 text-right font-bold text-slate-900 align-top">{fmtMoney(getTrxTotal(trx))}</td>
                                 <td className="p-4 text-center align-top flex gap-2 justify-center">
                                     <button onClick={() => { setCurrentTrx(trx); setPrintType('receipt'); setShowReceiptPreview(true); }} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-slate-800" title="Preview & Print"><Printer size={16}/></button>
@@ -1042,13 +1025,12 @@ export default function PosPage() {
       {activeView === 'analysis' && (
         <div className="flex-1 overflow-hidden flex flex-col print:hidden space-y-4">
             
-            {/* Filter Bar dengan Tombol Quick Filter */}
+            {/* Filter Bar */}
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-start justify-between gap-4">
                 <div>
                     <h2 className="font-bold text-slate-800 flex items-center gap-2"><BarChart3 className="text-blue-600"/> POS Analysis (Daily)</h2>
                     <p className="text-xs text-slate-500 mt-1 mb-3">Data filter: {dateRange.start} s/d {dateRange.end} | Sumber Data: {viewSource === 'cloud' ? 'Google Sheets (Cloud)' : 'Device Memory (Local)'}</p>
                     
-                    {/* Tombol Quick Filter bisa digeser di HP */}
                     <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar w-full max-w-[90vw] md:w-max">
                         {['Hari ini', 'Kemarin', 'Minggu ini', 'Bulan ini', 'Bulan lalu'].map((label, i) => {
                             const keys = ['today', 'yesterday', 'thisWeek', 'thisMonth', 'lastMonth'];
@@ -1067,7 +1049,6 @@ export default function PosPage() {
                       <button onClick={() => setViewSource('cloud')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewSource === 'cloud' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500'}`}><Laptop2 size={14}/> Cloud</button>
                     </div>
 
-                    {/* KOMBO SELECT BULAN & TAHUN NATIVE */}
                     {(() => {
                         const [startYear, startMonth] = (dateRange.start || new Date().toISOString().split('T')[0]).split('-');
                         const yearNum = parseInt(startYear) || new Date().getFullYear();
@@ -1123,10 +1104,9 @@ export default function PosPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto flex flex-col md:flex-row gap-4 pb-4">
-                {/* --- UI TERBARU: REKONSILIASI & MARKETPLACE --- */}
                 <div className="w-full md:w-[45%] flex flex-col gap-4">
                     
-                    {/* RECONCILIATION TABLE (UNIT & CLOUD ONLY) */}
+                    {/* RECONCILIATION TABLE */}
                     <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col">
                         <h3 className="text-sm font-bold text-slate-800 mb-4 uppercase flex items-center gap-2"><PieChart size={16}/> Payment Reconciliation</h3>
                         <div className="flex-1 overflow-x-auto">
@@ -1158,7 +1138,7 @@ export default function PosPage() {
                         </div>
                     </div>
 
-                    {/* MARKETPLACE PENCAIRAN CARD (GROSS, COMMISSION, NET) */}
+                    {/* MARKETPLACE PENCAIRAN CARD */}
                     <div className="bg-slate-900 text-white p-5 rounded-xl shadow-md border border-slate-800 flex flex-col">
                         <h3 className="text-sm font-bold text-slate-300 mb-4 uppercase flex items-center gap-2"><Smartphone size={16}/> Pencairan Marketplace</h3>
                         <div className="space-y-4 flex-1 text-sm">
@@ -1248,10 +1228,10 @@ export default function PosPage() {
                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
                         <h4 className="text-xs font-bold text-blue-800 mb-2 uppercase border-b border-blue-200 pb-1">A. Sales Performance</h4>
                         <div className="grid grid-cols-2 gap-2 text-sm">
-                            <div className="flex justify-between"><span>Gross Sales</span><span className="font-mono">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id).reduce((acc, t) => acc + t.total, 0))}</span></div>
+                            <div className="flex justify-between"><span>Gross Sales</span><span className="font-mono">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id).reduce((acc, t) => acc + getTrxTotal(t), 0))}</span></div>
                             <div className="flex justify-between"><span>Discount</span><span className="font-mono text-rose-600">Rp 0</span></div>
                             <div className="flex justify-between"><span>Tax</span><span className="font-mono">Rp 0</span></div>
-                            <div className="flex justify-between font-bold text-blue-900 border-t border-blue-200 pt-1"><span>Net Sales</span><span className="font-mono text-lg">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id).reduce((acc, t) => acc + t.total, 0))}</span></div>
+                            <div className="flex justify-between font-bold text-blue-900 border-t border-blue-200 pt-1"><span>Net Sales</span><span className="font-mono text-lg">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id).reduce((acc, t) => acc + getTrxTotal(t), 0))}</span></div>
                         </div>
                     </div>
 
@@ -1266,7 +1246,7 @@ export default function PosPage() {
                                     {(() => {
                                         const shiftItemsMap: Record<string, {name: string, qty: number, total: number}> = {};
                                         allTransactions.filter(t => t.shiftId === shiftData.id).forEach(t => {
-                                            (t.items || []).forEach((item:any) => {
+                                            getTrxItems(t).forEach((item:any) => {
                                                 if (!shiftItemsMap[item.sku]) shiftItemsMap[item.sku] = { name: item.name, qty: 0, total: 0 };
                                                 shiftItemsMap[item.sku].qty += item.qty;
                                                 shiftItemsMap[item.sku].total += (item.qty * item.price);
@@ -1297,7 +1277,7 @@ export default function PosPage() {
                             {['Cash', 'QRIS', 'Transfer', 'ShopeeFood', 'GrabFood', 'GoFood'].map(method => (
                                 <div key={method} className="flex justify-between items-center">
                                     <span className="text-slate-600">{method}</span>
-                                    <span className="font-mono font-bold">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id && t.paymentMethod === method).reduce((acc, t) => acc + t.total, 0))}</span>
+                                    <span className="font-mono font-bold">{fmtMoney(allTransactions.filter(t => t.shiftId === shiftData.id && getTrxMethod(t) === method).reduce((acc, t) => acc + getTrxTotal(t), 0))}</span>
                                 </div>
                             ))}
                         </div>
@@ -1322,12 +1302,12 @@ export default function PosPage() {
                             </div>
                             
                             <div className={`p-3 rounded-lg text-sm flex justify-between items-center shadow-inner ${
-                                endCashInput - (shiftData.startCash + allTransactions.filter(t => t.shiftId === shiftData.id && t.paymentMethod === 'Cash').reduce((acc, t) => acc + t.total, 0) - cashOutInput) === 0 
+                                endCashInput - (shiftData.startCash + allTransactions.filter(t => t.shiftId === shiftData.id && getTrxMethod(t) === 'Cash').reduce((acc, t) => acc + getTrxTotal(t), 0) - cashOutInput) === 0 
                                 ? 'bg-emerald-500 text-white font-bold' 
                                 : 'bg-rose-500 text-white font-bold'
                             }`}>
                                 <span className="uppercase text-xs tracking-wider">Variance (Selisih)</span>
-                                <span className="text-lg">{fmtMoney(endCashInput - (shiftData.startCash + allTransactions.filter(t => t.shiftId === shiftData.id && t.paymentMethod === 'Cash').reduce((acc, t) => acc + t.total, 0) - cashOutInput))}</span>
+                                <span className="text-lg">{fmtMoney(endCashInput - (shiftData.startCash + allTransactions.filter(t => t.shiftId === shiftData.id && getTrxMethod(t) === 'Cash').reduce((acc, t) => acc + getTrxTotal(t), 0) - cashOutInput))}</span>
                             </div>
                         </div>
                     </div>
@@ -1346,6 +1326,7 @@ export default function PosPage() {
         </div>
       </div>)}
       
+      {/* MODAL PAYMENT + BACKDATE TRANSAKSI */}
       {showPaymentModal && (
           <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden">
               <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
@@ -1359,6 +1340,18 @@ export default function PosPage() {
                           <h2 className="text-3xl font-bold text-slate-900">{fmtMoney(cartTotal)}</h2>
                       </div>
                       
+                      {/* FITUR BACKDATE */}
+                      <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 shadow-inner">
+                          <label className="block text-[10px] font-bold text-amber-700 uppercase mb-1 flex items-center gap-1"><Clock size={12}/> Waktu Transaksi (Backdate)</label>
+                          <input 
+                              type="datetime-local" 
+                              className="w-full p-2 border border-amber-300 rounded-lg text-sm font-bold text-amber-900 bg-white focus:ring-2 focus:ring-amber-400 outline-none"
+                              value={customTrxDate}
+                              onChange={e => setCustomTrxDate(e.target.value)}
+                          />
+                          <p className="text-[9px] text-amber-600 mt-1 italic">*Ubah hanya jika Anda memasukkan nota / transaksi dari hari sebelumnya.</p>
+                      </div>
+
                       {renderPaymentOptions()}
 
                       {paymentMethod === 'Cash' && (
@@ -1393,6 +1386,7 @@ export default function PosPage() {
       
       {showSuccessModal && (<div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl text-center p-8 animate-in zoom-in-95"><div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle2 size={32}/></div><h3 className="font-bold text-xl text-slate-900 mb-2">Transaksi Berhasil!</h3><p className="text-sm text-slate-500 mb-6">Total Transaksi: <span className="font-bold text-slate-800">{fmtMoney(currentTrx?.total || 0)}</span></p><div className="space-y-3"><button onClick={() => setShowSuccessModal(false)} className="w-full py-3 bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200">Simpan Transaksi Saja</button><button onClick={handlePrintReceipt} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 flex items-center justify-center gap-2"><Printer size={18}/> Preview & Cetak Nota</button></div></div></div>)}
       
+      {/* PREVIEW MODAL */}
       {showReceiptPreview && (<div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm print:hidden"><div className="bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"><div className="p-4 border-b flex justify-between items-center bg-slate-50"><h3 className="font-bold text-slate-800">Preview Cetakan</h3><button onClick={() => setShowReceiptPreview(false)}><X className="text-slate-400"/></button></div><div className="p-8 bg-slate-200 overflow-y-auto flex justify-center"><div className="bg-white p-4 w-[300px] shadow-sm text-[10px] font-mono leading-tight">{printType === 'receipt' && currentTrx && <ReceiptTemplate trx={currentTrx}/>}{printType === 'shift_report' && shiftReportData && <ShiftReportTemplate data={shiftReportData}/>}</div></div><div className="p-4 border-t bg-white flex justify-end gap-2"><button onClick={() => setShowReceiptPreview(false)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-50 rounded-lg">Batal</button><button onClick={() => window.print()} className="px-6 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 flex items-center gap-2"><Printer size={16}/><FileDown size={16}/> Cetak / Simpan PDF</button></div></div></div>)}
       
       {/* --- PRINT AREA --- */}
