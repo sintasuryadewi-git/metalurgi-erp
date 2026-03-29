@@ -55,7 +55,10 @@ const getTrxMethod = (trx: any) => {
 const getTrxItems = (trx: any) => {
     if (!trx) return [];
     if (Array.isArray(trx.items)) return trx.items;
-    let rawData = trx.Items_Json || trx.items_json || trx.Items || Object.values(trx)[6] || '';
+    let rawData = null;
+    for (const key in trx) {
+        if (key.toLowerCase().includes('item')) { rawData = trx[key]; break; }
+    }
     if (!rawData || rawData === '[]') return [];
     try {
         let cleanStr = typeof rawData === 'string' ? rawData.replace(/""/g, '"') : rawData;
@@ -98,7 +101,6 @@ export default function SalesReportPage() {
   const [dateRange, setDateRange] = useState({ start: '2020-01-01', end: new Date().toISOString().split('T')[0] });
   const [trendFilter, setTrendFilter] = useState<'1m' | '3m' | '6m' | 'ytd'>('1m');
 
-  // STATE UNTUK FITUR B2B & CSV
   const [csvSummary, setCsvSummary] = useState<any>(null);
   const [isProcessingCsv, setIsProcessingCsv] = useState(false);
 
@@ -278,9 +280,6 @@ export default function SalesReportPage() {
       } catch (err) { alert("Terjadi kesalahan."); } finally { setIsSaving(false); }
   };
 
-  // ==========================================
-  // 5. ENGINE CSV PARSER (SHOPEE FOOD ADAPTER)
-  // ==========================================
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -291,7 +290,6 @@ export default function SalesReportPage() {
           const lines = text.split(/\r?\n/);
           if (lines.length < 2) return alert("File CSV kosong atau tidak valid.");
 
-          // Cerdas mengenali kolom berdasarkan Header
           const headers = lines[0].split(',');
           const idxGross = headers.findIndex(h => h.includes('Order Amount'));
           const idxNet = headers.findIndex(h => h.includes('Net Income'));
@@ -315,7 +313,7 @@ export default function SalesReportPage() {
           setCsvSummary({
               filename: file.name,
               channel: 'ShopeeFood',
-              date: new Date().toISOString().split('T')[0], // Bisa diambil dari CSV
+              date: new Date().toISOString().split('T')[0], 
               count, totalGross, totalNet, totalComm, totalPromo
           });
       };
@@ -329,7 +327,6 @@ export default function SalesReportPage() {
       const uniqueId = `SHP_${Date.now().toString().slice(-6)}`;
       const invNumber = `INV-${uniqueId}`;
 
-      // Payload sesuai dengan Kesepakatan Struktur Kolom
       const payload = {
           invoiceData: [
               csvSummary.date, csvSummary.date, invNumber, 'ShopeeFood', 'Bulk Settlement', csvSummary.count, 
@@ -351,50 +348,47 @@ export default function SalesReportPage() {
               body: JSON.stringify({ action: 'PROCESS_MARKETPLACE_CSV', payload })
           });
           const json = await res.json();
-          if (json.success) {
-              alert(json.message);
-              setCsvSummary(null);
-          } else { alert("Gagal memproses: " + json.error); }
+          if (json.success) { alert(json.message); setCsvSummary(null); } else { alert("Gagal memproses: " + json.error); }
       } catch (e) { alert("Terjadi kesalahan jaringan."); }
       finally { setIsProcessingCsv(false); }
   };
 
 
   return (
-    <div className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto space-y-6 bg-slate-50 min-h-screen">
+    <div className="p-2 md:p-6 lg:p-8 max-w-7xl mx-auto space-y-6 bg-slate-50 min-h-screen">
       
       {/* HEADER KONSOLIDASI */}
-      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+      <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-slate-200">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
               <div>
-                  <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><BarChart3 className="text-blue-600"/> Omnichannel Sales Report</h1>
-                  <p className="text-slate-500 text-sm mt-1">Konsolidasi Omzet POS Ritel, B2B Invoice, dan Pelacakan QRIS</p>
+                  <h1 className="text-xl md:text-2xl font-bold text-slate-800 flex items-center gap-2"><BarChart3 className="text-blue-600"/> Omnichannel Sales Report</h1>
+                  <p className="text-slate-500 text-xs md:text-sm mt-1">Konsolidasi Omzet POS Ritel, B2B Invoice, dan Pelacakan QRIS</p>
               </div>
-              <button onClick={handleRefresh} className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2 text-sm font-bold text-slate-600">
+              <button onClick={handleRefresh} className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2 text-sm font-bold text-slate-600 w-full md:w-auto justify-center">
                   <RefreshCw size={16} className={`${posLoading || fetchStatus.qris==='loading' ? 'animate-spin' : ''}`} /> Refresh Data
               </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-slate-100">
-              <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar w-full max-w-[90vw] md:w-max">
+              <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar w-full md:w-max">
                   {['Semua Waktu', 'Hari ini', 'Kemarin', 'Minggu ini', 'Bulan ini', 'Bulan lalu'].map((label: string) => {
                       const keys: Record<string, string> = { 'Semua Waktu':'all', 'Hari ini':'today', 'Kemarin':'yesterday', 'Minggu ini':'thisWeek', 'Bulan ini':'thisMonth', 'Bulan lalu':'lastMonth' };
                       return (
-                          <button key={label} onClick={() => handleQuickFilter(keys[label])} className="px-4 py-2 bg-white text-slate-600 hover:bg-blue-50 hover:text-blue-600 rounded-xl text-xs font-bold whitespace-nowrap transition-colors border border-slate-200 shadow-sm">
+                          <button key={label} onClick={() => handleQuickFilter(keys[label])} className="px-3 md:px-4 py-2 bg-white text-slate-600 hover:bg-blue-50 hover:text-blue-600 rounded-xl text-xs font-bold whitespace-nowrap transition-colors border border-slate-200 shadow-sm flex-shrink-0">
                               {label}
                           </button>
                       );
                   })}
               </div>
-              <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-sm w-max">
-                  <Calendar size={16} className="text-slate-400"/>
-                  <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
-                  <span className="text-xs font-bold text-slate-400">-</span>
-                  <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
+              <div className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-sm w-full md:w-max">
+                  <Calendar size={16} className="text-slate-400 flex-shrink-0"/>
+                  <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none w-full" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})}/>
+                  <span className="text-xs font-bold text-slate-400 flex-shrink-0">-</span>
+                  <input type="date" className="text-xs font-bold text-slate-700 bg-transparent outline-none w-full" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})}/>
               </div>
           </div>
 
-          <div className="pt-3 mt-2 flex flex-wrap items-center gap-4 text-[10px] font-mono text-slate-400">
+          <div className="pt-3 mt-2 flex flex-wrap items-center gap-2 md:gap-4 text-[10px] font-mono text-slate-400">
               <span className="flex items-center gap-1"><Info size={12}/> DATA STATUS:</span>
               <span className={`px-2 py-0.5 rounded ${fetchStatus.pos === 'success' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
                   POS: {posLoading ? 'Loading...' : `${posData.length} baris`}
@@ -405,59 +399,60 @@ export default function SalesReportPage() {
           </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
-              <div className="absolute -right-4 -top-4 w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center"><Wallet size={24} className="text-blue-500 mr-2 mt-2"/></div>
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Total Revenue</p>
-              <h3 className="text-2xl font-black text-slate-800">{fmtMoney(dashboardData.totalPosSales)}</h3>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+          <div className="bg-white p-4 md:p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
+              <div className="absolute -right-4 -top-4 w-12 h-12 md:w-16 md:h-16 bg-blue-50 rounded-full flex items-center justify-center"><Wallet className="text-blue-500 w-5 h-5 md:w-6 md:h-6 mr-2 mt-2"/></div>
+              <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Total Revenue</p>
+              <h3 className="text-lg md:text-2xl font-black text-slate-800 truncate">{fmtMoney(dashboardData.totalPosSales)}</h3>
           </div>
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
-              <div className="absolute -right-4 -top-4 w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center"><Banknote size={24} className="text-emerald-500 mr-2 mt-2"/></div>
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Total Cash Collected</p>
-              <h3 className="text-2xl font-black text-emerald-600">{fmtMoney(dashboardData.totalPosSales)}</h3>
+          <div className="bg-white p-4 md:p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
+              <div className="absolute -right-4 -top-4 w-12 h-12 md:w-16 md:h-16 bg-emerald-50 rounded-full flex items-center justify-center"><Banknote className="text-emerald-500 w-5 h-5 md:w-6 md:h-6 mr-2 mt-2"/></div>
+              <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Cash Collected</p>
+              <h3 className="text-lg md:text-2xl font-black text-emerald-600 truncate">{fmtMoney(dashboardData.totalPosSales)}</h3>
           </div>
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
-              <div className="absolute -right-4 -top-4 w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center"><AlertCircle size={24} className="text-rose-500 mr-2 mt-2"/></div>
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Outstanding AR</p>
-              <h3 className="text-2xl font-black text-rose-600">Rp 0</h3>
+          <div className="bg-white p-4 md:p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
+              <div className="absolute -right-4 -top-4 w-12 h-12 md:w-16 md:h-16 bg-rose-50 rounded-full flex items-center justify-center"><AlertCircle className="text-rose-500 w-5 h-5 md:w-6 md:h-6 mr-2 mt-2"/></div>
+              <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Outstanding AR</p>
+              <h3 className="text-lg md:text-2xl font-black text-rose-600 truncate">Rp 0</h3>
           </div>
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
-              <div className="absolute -right-4 -top-4 w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center"><Package size={24} className="text-indigo-500 mr-2 mt-2"/></div>
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Total Items Sold</p>
-              <h3 className="text-2xl font-black text-indigo-600">{dashboardData.totalPosQty} <span className="text-sm font-medium text-slate-500">Pcs</span></h3>
+          <div className="bg-white p-4 md:p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center relative overflow-hidden">
+              <div className="absolute -right-4 -top-4 w-12 h-12 md:w-16 md:h-16 bg-indigo-50 rounded-full flex items-center justify-center"><Package className="text-indigo-500 w-5 h-5 md:w-6 md:h-6 mr-2 mt-2"/></div>
+              <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Items Sold</p>
+              <h3 className="text-lg md:text-2xl font-black text-indigo-600 truncate">{dashboardData.totalPosQty} <span className="text-xs md:text-sm font-medium text-slate-500">Pcs</span></h3>
           </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="flex border-b border-slate-100 overflow-x-auto custom-scrollbar bg-slate-50/50">
-              <button onClick={() => setActiveTab('overview')} className={`px-6 py-4 text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-2 border-b-2 ${activeTab === 'overview' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-500'}`}><BarChart3 size={16}/> Overview Ritel</button>
-              <button onClick={() => setActiveTab('qris')} className={`px-6 py-4 text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-2 border-b-2 ${activeTab === 'qris' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-500'}`}><Smartphone size={16}/> QRIS Settlement Radar</button>
-              <button onClick={() => setActiveTab('retail')} className={`px-6 py-4 text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-2 border-b-2 ${activeTab === 'retail' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-500'}`}><TrendingUp size={16}/> Product Performance</button>
-              <button onClick={() => setActiveTab('b2b')} className={`px-6 py-4 text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-2 border-b-2 ${activeTab === 'b2b' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-500'}`}><FileText size={16}/> B2B Invoice & AR</button>
+              <button onClick={() => setActiveTab('overview')} className={`px-4 md:px-6 py-3 md:py-4 text-xs md:text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-2 border-b-2 flex-shrink-0 ${activeTab === 'overview' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-500'}`}><BarChart3 size={16}/> Overview Ritel</button>
+              <button onClick={() => setActiveTab('qris')} className={`px-4 md:px-6 py-3 md:py-4 text-xs md:text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-2 border-b-2 flex-shrink-0 ${activeTab === 'qris' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-500'}`}><Smartphone size={16}/> QRIS Settlement Radar</button>
+              <button onClick={() => setActiveTab('retail')} className={`px-4 md:px-6 py-3 md:py-4 text-xs md:text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-2 border-b-2 flex-shrink-0 ${activeTab === 'retail' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-500'}`}><TrendingUp size={16}/> Product Performance</button>
+              <button onClick={() => setActiveTab('b2b')} className={`px-4 md:px-6 py-3 md:py-4 text-xs md:text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-2 border-b-2 flex-shrink-0 ${activeTab === 'b2b' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-500'}`}><FileText size={16}/> B2B Invoice & AR</button>
           </div>
 
-          <div className="p-6">
+          <div className="p-4 md:p-6">
               
+              {/* TAB 1: OVERVIEW RITEL */}
               {activeTab === 'overview' && (
                   <div className="space-y-6 animate-in fade-in duration-300">
-                      <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><PieChart size={20} className="text-blue-500"/> Breakdown Penjualan per Metode Distribusi</h3>
+                      <h3 className="text-base md:text-lg font-bold text-slate-800 flex items-center gap-2"><PieChart size={20} className="text-blue-500"/> Breakdown Penjualan per Metode Distribusi</h3>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                           {Object.entries(dashboardData.methodBreakdown).map(([method, data]) => {
                               if (data.nominal === 0 && data.unit === 0) return null;
                               const pctNominal = (data.nominal / (dashboardData.totalPosSales || 1)) * 100;
                               const colorClass = METHOD_COLORS[method] || '#94a3b8';
                               return (
-                                  <div key={method} className="bg-slate-50 p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden">
+                                  <div key={method} className="bg-slate-50 p-4 md:p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden">
                                       <div className="absolute top-0 left-0 w-1.5 h-full" style={{ backgroundColor: colorClass }}></div>
                                       <div className="pl-3">
                                           <p className="font-black text-slate-800 text-sm mb-2">{method}</p>
                                           <div className="flex justify-between items-end mb-1">
-                                              <span className="text-xs font-bold text-slate-500">Nominal</span>
-                                              <span className="text-lg font-black" style={{ color: colorClass }}>{fmtMoney(data.nominal)}</span>
+                                              <span className="text-[10px] md:text-xs font-bold text-slate-500">Nominal</span>
+                                              <span className="text-base md:text-lg font-black" style={{ color: colorClass }}>{fmtMoney(data.nominal)}</span>
                                           </div>
                                           <div className="flex justify-between items-end mb-4 pb-3 border-b border-slate-200">
-                                              <span className="text-xs font-bold text-slate-500">Unit Terjual</span>
-                                              <span className="text-sm font-bold text-slate-700">{data.unit} Pcs</span>
+                                              <span className="text-[10px] md:text-xs font-bold text-slate-500">Unit Terjual</span>
+                                              <span className="text-xs md:text-sm font-bold text-slate-700">{data.unit} Pcs</span>
                                           </div>
                                           <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
                                               <span>Kontribusi Total Omzet</span><span>{pctNominal.toFixed(1)}%</span>
@@ -473,81 +468,92 @@ export default function SalesReportPage() {
                   </div>
               )}
 
+              {/* TAB 2: QRIS SETTLEMENT RADAR */}
               {activeTab === 'qris' && (
                   <div className="space-y-6 animate-in fade-in duration-300">
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-900 rounded-2xl p-6 text-white shadow-lg">
-                          <div><p className="text-xs font-bold text-blue-300 uppercase mb-1 flex items-center gap-1"><Smartphone size={14}/> Total QRIS IN</p><p className="text-3xl font-mono font-bold">{fmtMoney(dashboardData.totalIn)}</p></div>
-                          <div className="border-t md:border-t-0 md:border-l border-slate-700 pt-4 md:pt-0 md:pl-6"><p className="text-xs font-bold text-emerald-400 uppercase mb-1 flex items-center gap-1"><CheckCircle2 size={14}/> Total Cair</p><p className="text-3xl font-mono font-bold">{fmtMoney(dashboardData.totalCair)}</p></div>
-                          <div className="border-t md:border-t-0 md:border-l border-slate-700 pt-4 md:pt-0 md:pl-6"><p className="text-xs font-bold text-rose-400 uppercase mb-1 flex items-center gap-1"><AlertCircle size={14}/> Uang Mengendap</p><p className="text-3xl font-mono font-bold">{fmtMoney(dashboardData.totalIn - dashboardData.totalCair)}</p></div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 bg-slate-900 rounded-2xl p-4 md:p-6 text-white shadow-lg">
+                          <div><p className="text-[10px] md:text-xs font-bold text-blue-300 uppercase mb-1 flex items-center gap-1"><Smartphone size={14}/> Total QRIS IN</p><p className="text-xl md:text-3xl font-mono font-bold truncate">{fmtMoney(dashboardData.totalIn)}</p></div>
+                          <div className="border-t md:border-t-0 md:border-l border-slate-700 pt-3 md:pt-0 md:pl-6"><p className="text-[10px] md:text-xs font-bold text-emerald-400 uppercase mb-1 flex items-center gap-1"><CheckCircle2 size={14}/> Total Cair</p><p className="text-xl md:text-3xl font-mono font-bold truncate">{fmtMoney(dashboardData.totalCair)}</p></div>
+                          <div className="border-t md:border-t-0 md:border-l border-slate-700 pt-3 md:pt-0 md:pl-6"><p className="text-[10px] md:text-xs font-bold text-rose-400 uppercase mb-1 flex items-center gap-1"><AlertCircle size={14}/> Uang Mengendap</p><p className="text-xl md:text-3xl font-mono font-bold truncate">{fmtMoney(dashboardData.totalIn - dashboardData.totalCair)}</p></div>
                       </div>
+                      
+                      {/* FIX: WRAPPER SCROLL HORIZONTAL UNTUK TABEL QRIS */}
                       <div className="border border-slate-200 rounded-xl overflow-hidden">
-                          <table className="w-full text-sm text-left">
-                              <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
-                                  <tr><th className="p-4">Tanggal Trx</th><th className="p-4 text-right">QRIS IN (Sistem)</th><th className="p-4 text-right">Nominal Cair</th><th className="p-4 text-right">Selisih</th><th className="p-4 text-center">Status</th><th className="p-4 text-center">Aksi</th></tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100 bg-white">
-                                  {dashboardData.qrisTableArray.length === 0 ? (
-                                      <tr><td colSpan={6} className="p-8 text-center text-slate-400">Tidak ada transaksi QRIS di rentang tanggal ini.</td></tr>
-                                  ) : (
-                                      dashboardData.qrisTableArray.map((row: any, idx: number) => {
-                                          const isEditing = editQrisDate === row.date;
-                                          const isSettled = row.inAmount > 0 && row.selisih <= 0; 
-                                          const isPending = row.cairAmount === 0 && row.inAmount > 0;
-                                          return (
-                                              <tr key={idx} className="hover:bg-blue-50/30">
-                                                  <td className="p-4 font-bold text-slate-700">{row.date}</td>
-                                                  <td className="p-4 text-right font-mono font-bold text-blue-600">{fmtMoney(row.inAmount)}</td>
-                                                  <td className="p-4 text-right">
-                                                      {isEditing ? (
-                                                          <div className="flex flex-col items-end gap-2">
-                                                              <input type="number" className="w-32 p-2 border-2 border-emerald-400 rounded-lg text-right font-mono font-bold text-slate-800 focus:outline-none" value={inputCair || ''} onChange={e => setInputCair(Number(e.target.value) || 0)} autoFocus/>
-                                                              <input type="text" className="w-40 p-1.5 border border-slate-300 rounded-md text-xs text-slate-600" value={inputKet} onChange={e => setInputKet(e.target.value)} placeholder="Keterangan (Opsional)"/>
-                                                          </div>
-                                                      ) : (<span className="font-mono font-bold text-emerald-600">{fmtMoney(row.cairAmount)}</span>)}
-                                                  </td>
-                                                  <td className={`p-4 text-right font-mono font-bold ${row.selisih > 0 ? 'text-rose-500' : 'text-slate-400'}`}>{isEditing ? fmtMoney(row.inAmount - inputCair) : fmtMoney(row.selisih)}</td>
-                                                  <td className="p-4 text-center"><span className={`px-2.5 py-1 text-[10px] font-bold rounded-full uppercase ${isSettled ? 'bg-emerald-100 text-emerald-700' : isPending ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>{isSettled ? 'Settled' : isPending ? 'Pending' : 'Partial'}</span></td>
-                                                  <td className="p-4 text-center">
-                                                      {isEditing ? (
-                                                          <div className="flex justify-center gap-2"><button onClick={() => setEditQrisDate(null)} className="px-3 py-1.5 text-xs font-bold text-slate-500 bg-slate-100 rounded-lg hover:bg-slate-200">Batal</button><button onClick={() => handleSaveRecon(row.date, row.inAmount)} disabled={isSaving} className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 flex items-center gap-1 shadow-md">{isSaving ? <Loader2 size={12} className="animate-spin"/> : <Save size={12}/>} Simpan</button></div>
-                                                      ) : (
-                                                          <button onClick={() => {setEditQrisDate(row.date); setInputCair(row.cairAmount); setInputKet(row.ket);}} className="px-3 py-1.5 text-xs font-bold text-blue-600 border border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100">{row.cairAmount === 0 ? '+ Input Cair' : 'Edit'}</button>
-                                                      )}
-                                                  </td>
-                                              </tr>
-                                          )
-                                      })
-                                  )}
-                              </tbody>
-                          </table>
+                          <div className="overflow-x-auto custom-scrollbar w-full max-h-[600px] overflow-y-auto">
+                              <table className="w-full text-sm text-left min-w-[800px]">
+                                  <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200 sticky top-0 z-10">
+                                      <tr><th className="p-4">Tanggal Trx</th><th className="p-4 text-right">QRIS IN (Sistem)</th><th className="p-4 text-right">Nominal Cair</th><th className="p-4 text-right">Selisih</th><th className="p-4 text-center">Status</th><th className="p-4 text-center">Aksi</th></tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100 bg-white">
+                                      {dashboardData.qrisTableArray.length === 0 ? (
+                                          <tr><td colSpan={6} className="p-8 text-center text-slate-400">Tidak ada transaksi QRIS di rentang tanggal ini.</td></tr>
+                                      ) : (
+                                          dashboardData.qrisTableArray.map((row: any, idx: number) => {
+                                              const isEditing = editQrisDate === row.date;
+                                              const isSettled = row.inAmount > 0 && row.selisih <= 0; 
+                                              const isPending = row.cairAmount === 0 && row.inAmount > 0;
+                                              return (
+                                                  <tr key={idx} className="hover:bg-blue-50/30">
+                                                      <td className="p-4 font-bold text-slate-700 whitespace-nowrap">{row.date}</td>
+                                                      <td className="p-4 text-right font-mono font-bold text-blue-600 whitespace-nowrap">{fmtMoney(row.inAmount)}</td>
+                                                      <td className="p-4 text-right whitespace-nowrap">
+                                                          {isEditing ? (
+                                                              <div className="flex flex-col items-end gap-2">
+                                                                  <input type="number" className="w-32 p-2 border-2 border-emerald-400 rounded-lg text-right font-mono font-bold text-slate-800 focus:outline-none" value={inputCair || ''} onChange={e => setInputCair(Number(e.target.value) || 0)} autoFocus/>
+                                                                  <input type="text" className="w-40 p-1.5 border border-slate-300 rounded-md text-xs text-slate-600" value={inputKet} onChange={e => setInputKet(e.target.value)} placeholder="Keterangan (Opsional)"/>
+                                                              </div>
+                                                          ) : (<span className="font-mono font-bold text-emerald-600">{fmtMoney(row.cairAmount)}</span>)}
+                                                      </td>
+                                                      <td className={`p-4 text-right font-mono font-bold whitespace-nowrap ${row.selisih > 0 ? 'text-rose-500' : 'text-slate-400'}`}>{isEditing ? fmtMoney(row.inAmount - inputCair) : fmtMoney(row.selisih)}</td>
+                                                      <td className="p-4 text-center whitespace-nowrap"><span className={`px-2.5 py-1 text-[10px] font-bold rounded-full uppercase ${isSettled ? 'bg-emerald-100 text-emerald-700' : isPending ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>{isSettled ? 'Settled' : isPending ? 'Pending' : 'Partial'}</span></td>
+                                                      <td className="p-4 text-center whitespace-nowrap">
+                                                          {isEditing ? (
+                                                              <div className="flex justify-center gap-2"><button onClick={() => setEditQrisDate(null)} className="px-3 py-1.5 text-xs font-bold text-slate-500 bg-slate-100 rounded-lg hover:bg-slate-200">Batal</button><button onClick={() => handleSaveRecon(row.date, row.inAmount)} disabled={isSaving} className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 flex items-center gap-1 shadow-md">{isSaving ? <Loader2 size={12} className="animate-spin"/> : <Save size={12}/>} Simpan</button></div>
+                                                          ) : (
+                                                              <button onClick={() => {setEditQrisDate(row.date); setInputCair(row.cairAmount); setInputKet(row.ket);}} className="px-3 py-1.5 text-xs font-bold text-blue-600 border border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100">{row.cairAmount === 0 ? '+ Input Cair' : 'Edit'}</button>
+                                                          )}
+                                                      </td>
+                                                  </tr>
+                                              )
+                                          })
+                                      )}
+                                  </tbody>
+                              </table>
+                          </div>
                       </div>
                   </div>
               )}
 
+              {/* TAB 3: PRODUCT RETAIL */}
               {activeTab === 'retail' && (
                   <div className="animate-in fade-in duration-300">
+                      
+                      {/* FIX: WRAPPER SCROLL HORIZONTAL & VERTICAL UNTUK TABEL PRODUK */}
                       <div className="border border-slate-200 rounded-2xl overflow-hidden">
-                          <table className="w-full text-sm text-left">
-                              <thead className="bg-slate-50 text-slate-400 font-bold text-xs uppercase border-b">
-                                  <tr><th className="p-4">Rank</th><th className="p-4">Nama Barang</th><th className="p-4 text-center">Total Unit Terjual</th><th className="p-4 text-right">Total Nominal</th></tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                  {dashboardData.rankedItems.map((item: any, i: number) => (
-                                      <tr key={i} className="hover:bg-blue-50/30">
-                                          <td className="p-4 text-slate-400 font-bold">#{i+1}</td><td className="p-4 font-bold text-slate-700">{item.name}</td>
-                                          <td className="p-4 text-center"><span className="px-3 py-1 bg-slate-100 rounded-lg font-bold text-slate-600">{item.qty} Pcs</span></td>
-                                          <td className="p-4 text-right font-bold text-blue-600">{fmtMoney(item.total)}</td>
+                          <div className="overflow-x-auto custom-scrollbar w-full max-h-[600px] overflow-y-auto">
+                              <table className="w-full text-sm text-left min-w-[600px]">
+                                  <thead className="bg-slate-50 text-slate-400 font-bold text-xs uppercase border-b sticky top-0 z-10 shadow-sm">
+                                      <tr><th className="p-4">Rank</th><th className="p-4">Nama Barang</th><th className="p-4 text-center">Total Unit Terjual</th><th className="p-4 text-right">Total Nominal</th></tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100 bg-white">
+                                      {dashboardData.rankedItems.map((item: any, i: number) => (
+                                          <tr key={i} className="hover:bg-blue-50/30">
+                                              <td className="p-4 text-slate-400 font-bold whitespace-nowrap">#{i+1}</td>
+                                              <td className="p-4 font-bold text-slate-700">{item.name}</td>
+                                              <td className="p-4 text-center whitespace-nowrap"><span className="px-3 py-1 bg-slate-100 rounded-lg font-bold text-slate-600">{item.qty} Pcs</span></td>
+                                              <td className="p-4 text-right font-bold text-blue-600 whitespace-nowrap">{fmtMoney(item.total)}</td>
+                                          </tr>
+                                      ))}
+                                  </tbody>
+                                  <tfoot className="bg-slate-800 text-white sticky bottom-0 z-10">
+                                      <tr>
+                                          <th colSpan={2} className="p-4 text-right font-black uppercase text-slate-300 tracking-widest text-xs md:text-sm">TOTAL KESELURUHAN:</th>
+                                          <th className="p-4 text-center font-black text-sm md:text-lg whitespace-nowrap">{dashboardData.totalPosQty} Pcs</th>
+                                          <th className="p-4 text-right font-black text-emerald-400 text-sm md:text-lg whitespace-nowrap">{fmtMoney(dashboardData.totalPosSales)}</th>
                                       </tr>
-                                  ))}
-                              </tbody>
-                              <tfoot className="bg-slate-800 text-white">
-                                  <tr>
-                                      <th colSpan={2} className="p-4 text-right font-black uppercase text-slate-300 tracking-widest">TOTAL KESELURUHAN:</th>
-                                      <th className="p-4 text-center font-black text-lg">{dashboardData.totalPosQty} Pcs</th>
-                                      <th className="p-4 text-right font-black text-emerald-400 text-lg">{fmtMoney(dashboardData.totalPosSales)}</th>
-                                  </tr>
-                              </tfoot>
-                          </table>
+                                  </tfoot>
+                              </table>
+                          </div>
                       </div>
                   </div>
               )}
@@ -555,149 +561,129 @@ export default function SalesReportPage() {
               {/* TAB 4: B2B INVOICE & MARKETPLACE RECONCILIATION */}
               {activeTab === 'b2b' && (
                   <div className="animate-in fade-in duration-300 space-y-8">
-                      
-                      {/* MARKETPLACE CSV UPLOADER */}
-                      <div className="bg-orange-50/50 p-6 rounded-2xl border-2 border-dashed border-orange-200 text-center relative overflow-hidden">
-                          <UploadCloud size={48} className="mx-auto text-orange-400 mb-3 opacity-50"/>
-                          <h3 className="text-lg font-bold text-slate-800 mb-1">Marketplace Auto-Clearing (CSV)</h3>
-                          <p className="text-sm text-slate-500 mb-4 max-w-lg mx-auto">Tarik & Lepas file laporan CSV dari ShopeeFood di sini. Sistem akan otomatis memecah pendapatan bersih, potongan komisi, dan biaya diskon ke dalam buku besar.</p>
-                          
-                          <label className="bg-white border border-slate-300 shadow-sm px-6 py-2 rounded-xl text-sm font-bold text-blue-600 cursor-pointer hover:bg-blue-50 transition-colors inline-block relative z-10">
+                      <div className="bg-orange-50/50 p-4 md:p-6 rounded-2xl border-2 border-dashed border-orange-200 text-center relative overflow-hidden">
+                          <UploadCloud className="mx-auto text-orange-400 mb-3 opacity-50 w-10 h-10 md:w-12 md:h-12"/>
+                          <h3 className="text-base md:text-lg font-bold text-slate-800 mb-1">Marketplace Auto-Clearing (CSV)</h3>
+                          <p className="text-xs md:text-sm text-slate-500 mb-4 max-w-lg mx-auto">Tarik & Lepas file laporan CSV dari ShopeeFood di sini. Sistem akan otomatis memecah pendapatan bersih, potongan komisi, dan biaya diskon ke dalam buku besar.</p>
+                          <label className="bg-white border border-slate-300 shadow-sm px-4 md:px-6 py-2 rounded-xl text-xs md:text-sm font-bold text-blue-600 cursor-pointer hover:bg-blue-50 transition-colors inline-block relative z-10">
                               Pilih File CSV ShopeeFood
                               <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload} />
                           </label>
                       </div>
 
-                      {/* CSV SUMMARY PREVIEW */}
                       {csvSummary && (
-                          <div className="bg-white border-2 border-emerald-400 rounded-2xl p-6 shadow-xl relative animate-in slide-in-from-bottom-4">
+                          <div className="bg-white border-2 border-emerald-400 rounded-2xl p-4 md:p-6 shadow-xl relative animate-in slide-in-from-bottom-4 overflow-x-auto">
                               <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl rounded-tr-xl">FILE TERBACA</div>
-                              <h4 className="font-bold text-slate-800 border-b border-slate-100 pb-3 mb-4 flex items-center gap-2"><CheckCircle2 className="text-emerald-500"/> Validasi Data: {csvSummary.filename}</h4>
+                              <h4 className="font-bold text-slate-800 border-b border-slate-100 pb-3 mb-4 flex items-center gap-2 text-sm md:text-base"><CheckCircle2 className="text-emerald-500"/> Validasi Data: {csvSummary.filename}</h4>
                               
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6 min-w-[500px]">
                                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                                      <p className="text-[10px] font-bold text-slate-500 uppercase">Total Transaksi</p>
-                                      <p className="text-xl font-black text-slate-800">{csvSummary.count} <span className="text-sm font-medium">Trx</span></p>
+                                      <p className="text-[9px] md:text-[10px] font-bold text-slate-500 uppercase">Total Transaksi</p>
+                                      <p className="text-lg md:text-xl font-black text-slate-800">{csvSummary.count} <span className="text-xs md:text-sm font-medium">Trx</span></p>
                                   </div>
                                   <div className="bg-blue-50 p-3 rounded-xl border border-blue-100">
-                                      <p className="text-[10px] font-bold text-blue-500 uppercase">Gross Amount (POS)</p>
-                                      <p className="text-xl font-black text-blue-700">{fmtMoney(csvSummary.totalGross)}</p>
+                                      <p className="text-[9px] md:text-[10px] font-bold text-blue-500 uppercase">Gross Amount (POS)</p>
+                                      <p className="text-lg md:text-xl font-black text-blue-700 truncate" title={fmtMoney(csvSummary.totalGross)}>{fmtMoney(csvSummary.totalGross)}</p>
                                   </div>
                                   <div className="bg-rose-50 p-3 rounded-xl border border-rose-100">
-                                      <p className="text-[10px] font-bold text-rose-500 uppercase">Total Potongan (Beban)</p>
-                                      <p className="text-xl font-black text-rose-600">{fmtMoney(csvSummary.totalComm + csvSummary.totalPromo)}</p>
-                                      <p className="text-[9px] text-rose-400 mt-1">Komisi: {fmtMoneyShort(csvSummary.totalComm)} | Promo: {fmtMoneyShort(csvSummary.totalPromo)}</p>
+                                      <p className="text-[9px] md:text-[10px] font-bold text-rose-500 uppercase">Potongan (Beban)</p>
+                                      <p className="text-lg md:text-xl font-black text-rose-600 truncate" title={fmtMoney(csvSummary.totalComm + csvSummary.totalPromo)}>{fmtMoney(csvSummary.totalComm + csvSummary.totalPromo)}</p>
                                   </div>
                                   <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
-                                      <p className="text-[10px] font-bold text-emerald-600 uppercase">Net Income (Cair Bank)</p>
-                                      <p className="text-xl font-black text-emerald-700">{fmtMoney(csvSummary.totalNet)}</p>
+                                      <p className="text-[9px] md:text-[10px] font-bold text-emerald-600 uppercase">Net Income (Cair Bank)</p>
+                                      <p className="text-lg md:text-xl font-black text-emerald-700 truncate" title={fmtMoney(csvSummary.totalNet)}>{fmtMoney(csvSummary.totalNet)}</p>
                                   </div>
                               </div>
 
                               <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
-                                  <button onClick={() => setCsvSummary(null)} className="px-5 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition-colors">Batal</button>
-                                  <button onClick={processCsvToDatabase} disabled={isProcessingCsv} className="px-6 py-2 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-md flex items-center gap-2 transition-colors">
-                                      {isProcessingCsv ? <Loader2 size={16} className="animate-spin"/> : <Save size={16}/>} Proses & Jurnal Semua
+                                  <button onClick={() => setCsvSummary(null)} className="px-4 md:px-5 py-2 text-xs md:text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition-colors">Batal</button>
+                                  <button onClick={processCsvToDatabase} disabled={isProcessingCsv} className="px-4 md:px-6 py-2 text-xs md:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-md flex items-center gap-2 transition-colors">
+                                      {isProcessingCsv ? <Loader2 size={16} className="animate-spin"/> : <Save size={16}/>} <span className="hidden md:inline">Proses & Jurnal Semua</span><span className="md:hidden">Proses</span>
                                   </button>
                               </div>
                           </div>
                       )}
-
-                      {/* AR DASHBOARD (COMING SOON PREVIEW) */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 opacity-60 pointer-events-none">
-                          <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-                              <div className="bg-slate-50 p-4 border-b border-slate-200 font-bold text-slate-700 flex justify-between">
-                                  <span>Outstanding AR (Piutang)</span><span className="text-xs bg-rose-100 text-rose-600 px-2 py-0.5 rounded-full">Butuh Payment</span>
-                              </div>
-                              <div className="p-12 text-center text-slate-400 text-sm">Area untuk list Tagihan B2B yang belum dilunasi.</div>
-                          </div>
-                          <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-                              <div className="bg-slate-50 p-4 border-b border-slate-200 font-bold text-slate-700 flex justify-between">
-                                  <span>Unallocated Payment (Dana Menggantung)</span><span className="text-xs bg-amber-100 text-amber-600 px-2 py-0.5 rounded-full">Butuh Invoice</span>
-                              </div>
-                              <div className="p-12 text-center text-slate-400 text-sm">Area untuk list Uang Masuk yang belum ada notanya.</div>
-                          </div>
-                      </div>
-
                   </div>
               )}
           </div>
       </div>
 
       {/* GRAFIK TREND LINE CHART INTERAKTIF */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mt-8">
+      <div className="bg-white p-4 md:p-6 rounded-2xl border border-slate-200 shadow-sm mt-8">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-6">
               <div>
-                  <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><Activity size={20} className="text-blue-500"/> Tren Omzet by Distribusi</h3>
-                  <p className="text-xs text-slate-500 mt-1">Pergerakan nominal penjualan harian (Line Chart).</p>
+                  <h3 className="text-base md:text-xl font-bold text-slate-800 flex items-center gap-2"><Activity size={20} className="text-blue-500"/> Tren Omzet by Distribusi</h3>
+                  <p className="text-[10px] md:text-xs text-slate-500 mt-1">Pergerakan nominal penjualan harian (Line Chart).</p>
               </div>
-              <div className="flex gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
-                  {[{ id: '1m', label: '1 Bulan' }, { id: '3m', label: '3 Bulan' }, { id: '6m', label: '6 Bulan' }, { id: 'ytd', label: 'Tahun Ini' }].map(f => (
-                      <button key={f.id} onClick={() => setTrendFilter(f.id as any)} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-colors ${trendFilter === f.id ? 'bg-white text-blue-600 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>{f.label}</button>
+              <div className="flex gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200 overflow-x-auto w-full md:w-auto custom-scrollbar">
+                  {[{ id: '1m', label: '1 Bulan' }, { id: '3m', label: '3 Bulan (Q)' }, { id: '6m', label: '6 Bulan (SM)' }, { id: 'ytd', label: 'Tahun Ini' }].map(f => (
+                      <button key={f.id} onClick={() => setTrendFilter(f.id as any)} className={`px-3 md:px-4 py-1.5 text-[10px] md:text-xs font-bold rounded-md transition-colors whitespace-nowrap ${trendFilter === f.id ? 'bg-white text-blue-600 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>{f.label}</button>
                   ))}
               </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-4 mb-4 text-xs font-bold uppercase pb-4 border-b border-slate-100">
+          <div className="flex flex-wrap items-center gap-2 md:gap-4 mb-4 text-[10px] md:text-xs font-bold uppercase pb-4 border-b border-slate-100">
               {trendData.activeMethods.map(m => (
-                  <div key={m} className="flex items-center gap-2"><span className="w-4 h-1 rounded-full" style={{ backgroundColor: METHOD_COLORS[m] || '#94a3b8' }}></span> {m}</div>
+                  <div key={m} className="flex items-center gap-1.5 md:gap-2"><span className="w-3 h-1 md:w-4 md:h-1 rounded-full" style={{ backgroundColor: METHOD_COLORS[m] || '#94a3b8' }}></span> {m}</div>
               ))}
           </div>
 
-          <div className="relative w-full h-[350px] pt-4 font-sans select-none">
-              <div className="absolute inset-0 flex flex-col justify-between pointer-events-none pb-8 ml-10">
-                  {[0, 1, 2, 3, 4].map(i => {
-                      const val = trendData.maxVal - (trendData.maxVal / 4) * i;
-                      return (
-                          <div key={i} className="w-full border-t border-slate-100 border-dashed relative flex items-center">
-                              <span className="absolute -left-2 -translate-x-full text-[10px] font-bold text-slate-400">{i === 4 ? '0' : fmtMoneyShort(val)}</span>
-                          </div>
-                      )
-                  })}
-              </div>
-
-              {trendData.dates.length === 0 ? (
-                  <div className="absolute inset-0 flex items-center justify-center text-slate-400 font-medium text-sm">Tidak ada data untuk periode ini.</div>
-              ) : (
-                  <div className="relative w-full h-full flex flex-col ml-10" style={{ width: 'calc(100% - 40px)' }}>
-                      <svg viewBox="0 0 1000 300" preserveAspectRatio="none" className="w-full h-full pb-8 overflow-visible">
-                          {trendData.activeMethods.map(m => {
-                              const points = trendData.dates.map((d, i) => {
-                                  const x = (i / Math.max(trendData.dates.length - 1, 1)) * 1000;
-                                  const val = trendData.tMap[d][m] || 0;
-                                  const y = 300 - ((val / (trendData.maxVal || 1)) * 300);
-                                  return `${x},${y}`;
-                              }).join(' L ');
-                              return (<path key={m} d={`M ${points}`} fill="none" stroke={METHOD_COLORS[m] || '#94a3b8'} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-sm opacity-80 hover:opacity-100 transition-opacity" />);
-                          })}
-                      </svg>
-
-                      <div className="absolute inset-0 w-full h-full pb-8 flex">
-                          {trendData.dates.map((d, i) => {
-                              const showDate = i % Math.ceil(trendData.dates.length / 8) === 0 || i === trendData.dates.length - 1;
-                              return (
-                                  <div key={d} className="flex-1 h-full group relative flex justify-center cursor-crosshair">
-                                      <div className="w-px h-full bg-slate-300 opacity-0 group-hover:opacity-100 transition-opacity absolute"></div>
-                                      <div className="absolute bottom-full mb-2 bg-slate-900 border border-slate-700 text-white p-3 rounded-xl text-xs min-w-[160px] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20 shadow-2xl -translate-x-1/2 left-1/2">
-                                          <p className="font-bold border-b border-slate-700 pb-1.5 mb-2 text-slate-300">{formatDateShort(d)}</p>
-                                          {trendData.activeMethods.map(m => {
-                                              const val = trendData.tMap[d][m] || 0;
-                                              if (val === 0) return null;
-                                              return (
-                                                  <div key={m} className="flex justify-between items-center gap-4 mb-1">
-                                                      <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full" style={{ backgroundColor: METHOD_COLORS[m] }}></span> {m}</span>
-                                                      <span className="font-mono font-bold text-white">{fmtMoney(val)}</span>
-                                                  </div>
-                                              )
-                                          })}
-                                      </div>
-                                      {showDate && (<div className="absolute -bottom-6 text-[10px] font-bold text-slate-400 whitespace-nowrap">{formatDateShort(d)}</div>)}
-                                  </div>
-                              )
-                          })}
-                      </div>
+          <div className="relative w-full h-[250px] md:h-[350px] pt-4 font-sans select-none overflow-x-auto custom-scrollbar">
+              <div className="min-w-[600px] h-full relative">
+                  <div className="absolute inset-0 flex flex-col justify-between pointer-events-none pb-6 md:pb-8 ml-8 md:ml-10">
+                      {[0, 1, 2, 3, 4].map(i => {
+                          const val = trendData.maxVal - (trendData.maxVal / 4) * i;
+                          return (
+                              <div key={i} className="w-full border-t border-slate-100 border-dashed relative flex items-center">
+                                  <span className="absolute -left-2 -translate-x-full text-[8px] md:text-[10px] font-bold text-slate-400">{i === 4 ? '0' : fmtMoneyShort(val)}</span>
+                              </div>
+                          )
+                      })}
                   </div>
-              )}
+
+                  {trendData.dates.length === 0 ? (
+                      <div className="absolute inset-0 flex items-center justify-center text-slate-400 font-medium text-xs md:text-sm">Tidak ada data untuk periode ini.</div>
+                  ) : (
+                      <div className="relative w-full h-full flex flex-col ml-8 md:ml-10" style={{ width: 'calc(100% - 32px)' }}>
+                          <svg viewBox="0 0 1000 300" preserveAspectRatio="none" className="w-full h-full pb-6 md:pb-8 overflow-visible">
+                              {trendData.activeMethods.map(m => {
+                                  const points = trendData.dates.map((d, i) => {
+                                      const x = (i / Math.max(trendData.dates.length - 1, 1)) * 1000;
+                                      const val = trendData.tMap[d][m] || 0;
+                                      const y = 300 - ((val / (trendData.maxVal || 1)) * 300);
+                                      return `${x},${y}`;
+                                  }).join(' L ');
+                                  return (<path key={m} d={`M ${points}`} fill="none" stroke={METHOD_COLORS[m] || '#94a3b8'} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-sm opacity-80 hover:opacity-100 transition-opacity" />);
+                              })}
+                          </svg>
+
+                          <div className="absolute inset-0 w-full h-full pb-6 md:pb-8 flex">
+                              {trendData.dates.map((d, i) => {
+                                  const showDate = i % Math.ceil(trendData.dates.length / 8) === 0 || i === trendData.dates.length - 1;
+                                  return (
+                                      <div key={d} className="flex-1 h-full group relative flex justify-center cursor-crosshair">
+                                          <div className="w-px h-full bg-slate-300 opacity-0 group-hover:opacity-100 transition-opacity absolute"></div>
+                                          <div className="absolute bottom-full mb-2 bg-slate-900 border border-slate-700 text-white p-2 md:p-3 rounded-xl text-[10px] md:text-xs min-w-[140px] md:min-w-[160px] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20 shadow-2xl -translate-x-1/2 left-1/2">
+                                              <p className="font-bold border-b border-slate-700 pb-1.5 mb-2 text-slate-300">{formatDateShort(d)}</p>
+                                              {trendData.activeMethods.map(m => {
+                                                  const val = trendData.tMap[d][m] || 0;
+                                                  if (val === 0) return null;
+                                                  return (
+                                                      <div key={m} className="flex justify-between items-center gap-3 md:gap-4 mb-1">
+                                                          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full" style={{ backgroundColor: METHOD_COLORS[m] }}></span> {m}</span>
+                                                          <span className="font-mono font-bold text-white">{fmtMoney(val)}</span>
+                                                      </div>
+                                                  )
+                                              })}
+                                          </div>
+                                          {showDate && (<div className="absolute -bottom-4 md:-bottom-6 text-[8px] md:text-[10px] font-bold text-slate-400 whitespace-nowrap">{formatDateShort(d)}</div>)}
+                                      </div>
+                                  )
+                              })}
+                          </div>
+                      </div>
+                  )}
+              </div>
           </div>
       </div>
 
